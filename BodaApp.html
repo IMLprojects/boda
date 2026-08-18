@@ -24,6 +24,28 @@
 <style>
   html, body, #root { margin: 0; padding: 0; }
   * { box-sizing: border-box; }
+
+  /* Navegación móvil: en pantallas estrechas se oculta la fila de pestañas de arriba (la que se
+     desplazaba horizontalmente y era fácil no darse cuenta de que se podía deslizar) y en su lugar
+     aparece una barra fija abajo, como en una app nativa, siempre visible y con botones grandes. */
+  .boda-bottom-nav { display: none; }
+  @media (max-width: 720px) {
+    .boda-top-tabs { display: none !important; }
+    .boda-main-content { padding-bottom: 82px !important; }
+    .boda-bottom-nav {
+      display: flex;
+      position: fixed; left: 0; right: 0; bottom: 0; z-index: 200;
+      background: #FFFFFF; border-top: 1px solid rgba(0,0,0,.09);
+      box-shadow: 0 -2px 12px rgba(0,0,0,.08);
+      padding-bottom: env(safe-area-inset-bottom, 0px);
+    }
+    .boda-bottom-nav button {
+      flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 2px; padding: 8px 2px 7px; border: none; background: none; cursor: pointer;
+      font-size: 10.5px; font-weight: 600; line-height: 1.15;
+    }
+    .boda-bottom-nav button .boda-nav-icon { font-size: 21px; line-height: 1; }
+  }
 </style>
 </head>
 <body>
@@ -3173,7 +3195,7 @@ function BodaApp() {
         <div style={{ fontSize: 15, fontWeight: 700, color: C.rose, marginRight: 16, whiteSpace: "nowrap" }}>
           💍 Marga & Iván
         </div>
-        <div style={{ display: "flex", gap: 2, flex: 1, overflowX: "auto" }}>
+        <div className="boda-top-tabs" style={{ display: "flex", gap: 2, flex: 1, overflowX: "auto" }}>
           {tabs.map((t) => (
             <button
               key={t.id}
@@ -3209,7 +3231,7 @@ function BodaApp() {
       </nav>
 
       {/* PANELS */}
-      <div style={{ maxWidth: 1120, margin: "0 auto", padding: "20px 20px 48px" }}>
+      <div className="boda-main-content" style={{ maxWidth: 1120, margin: "0 auto", padding: "20px 20px 48px" }}>
         <div style={{ margin: "0 0 16px" }}>
           <h1 style={{ fontSize: 20, fontWeight: 700 }}>
             {tabs.find((t) => t.id === tab)?.icon} {tabs.find((t) => t.id === tab)?.label}
@@ -3224,6 +3246,20 @@ function BodaApp() {
         {tab === "mesas" && <TabMesas guests={guests} setGuests={setGuests} tablesConfig={tablesConfig} setTablesConfig={setTablesConfig} deleteMesa={deleteMesa} elementos={elementos} setElementos={setElementos} familias={familias} />}
         {tab === "cuestionario" && <TabCuestionario bebidas={bebidas} setBebidas={setBebidas} canciones={canciones} setCanciones={setCanciones} revisar={revisar} setRevisar={setRevisar} />}
       </div>
+
+      {/* NAV MÓVIL: barra fija abajo, solo visible en pantallas estrechas (ver <style> del <head>) */}
+      <nav className="boda-bottom-nav">
+        {tabs.map((t) => (
+          <button
+            key={t.id}
+            onClick={() => setTab(t.id)}
+            style={{ color: tab === t.id ? C.rose : C.sub }}
+          >
+            <span className="boda-nav-icon">{t.icon}</span>
+            <span>{t.label}</span>
+          </button>
+        ))}
+      </nav>
     </div>
   );
 }

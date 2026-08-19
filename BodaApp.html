@@ -45,6 +45,16 @@
       font-size: 10.5px; font-weight: 600; line-height: 1.15;
     }
     .boda-bottom-nav button .boda-nav-icon { font-size: 21px; line-height: 1; }
+
+    /* Las tablas anchas (gastos, invitados, pagos...) no se aplastan: se pueden deslizar en
+       horizontal dentro de su tarjeta. Este aviso en la esquina deja claro que hay más columnas
+       a la derecha, para que no parezca que falta información. */
+    .boda-scroll-x { position: relative; }
+    .boda-scroll-x::before {
+      content: "◀ desliza ▶"; position: absolute; top: 6px; right: 6px; z-index: 5;
+      font-size: 9.5px; font-weight: 700; color: #fff; background: rgba(30,29,27,.6);
+      padding: 2px 7px; border-radius: 20px; pointer-events: none; white-space: nowrap;
+    }
   }
 </style>
 </head>
@@ -1452,7 +1462,7 @@ function PagosDePartida({ gasto, pagos, setPagos, guests, familias }) {
         <div style={{ fontSize: 12, color: C.sub, padding: "4px 2px" }}>Todavía no hay ningún pago registrado en esta partida.</div>
       ) : (
         <Card style={{ padding: 0, overflow: "hidden" }}>
-          <div style={{ overflowX: "auto" }}>
+          <div className="boda-scroll-x" style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse", minWidth: 620 }}>
               <thead>
                 <tr>
@@ -1685,7 +1695,7 @@ function TabGastos({ gastos, setGastos, pagos, setPagos, guests, familias }) {
       )}
 
       <Card style={{ padding: 0, overflow: "hidden", marginBottom: ingresos.length ? 16 : 0 }}>
-        <div style={{ overflowX: "auto" }}>
+        <div className="boda-scroll-x" style={{ overflowX: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr>
@@ -1710,7 +1720,7 @@ function TabGastos({ gastos, setGastos, pagos, setPagos, guests, familias }) {
 
       {ingresos.length > 0 && (
         <Card title="💰 Ingresos extra (no son un gasto — suman a la hucha en vez de restar)" style={{ padding: 0, overflow: "hidden" }}>
-          <div style={{ overflowX: "auto" }}>
+          <div className="boda-scroll-x" style={{ overflowX: "auto" }}>
             <table style={{ width: "100%", borderCollapse: "collapse" }}>
               <thead>
                 <tr>
@@ -2080,7 +2090,7 @@ function TabInvitados({ guests, setGuests, familias, setFamilias, pagos, gastos 
       <div style={{ fontSize: 12, color: C.sub, marginBottom: 8 }}>Mostrando {filtered.length} de {guests.length} · 📋 {nViaFormulario} confirmados por el formulario RSVP, {guests.length - nViaFormulario} por otra vía o sin especificar</div>
 
       <Card style={{ padding: 0, overflow: "hidden" }}>
-        <div style={{ overflowX: "auto", maxHeight: 560, overflowY: "auto" }}>
+        <div className="boda-scroll-x" style={{ overflowX: "auto", maxHeight: 560, overflowY: "auto" }}>
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>
               <tr>
@@ -2188,6 +2198,20 @@ function TabMesas({ guests, setGuests, tablesConfig, setTablesConfig, deleteMesa
   const [editingTable, setEditingTable] = useState(null); // número de mesa en edición de nombre
   const [draftTable, setDraftTable] = useState({});
   const floorRef = useRef(null);
+  // Escala del plano según el ancho real del contenedor: en el ordenador las mesas se ven a tamaño
+  // completo (700px de referencia), pero en un móvil estrecho el mismo plano mediría apenas 300-340px
+  // y los círculos (pensados en px fijos) se solaparían entre sí sin este ajuste.
+  const [planoScale, setPlanoScale] = useState(1);
+  useEffect(() => {
+    const el = floorRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver((entries) => {
+      const w = entries[0]?.contentRect?.width;
+      if (w) setPlanoScale(Math.max(0.5, Math.min(1, w / 700)));
+    });
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
   const [draggingMesa, setDraggingMesa] = useState(null); // mesa cuya posición se está arrastrando
   const [dragPos, setDragPos] = useState(null); // { mesa, x, y } posición en vivo mientras se arrastra (solo para pintar)
   const dragPosRef = useRef(null); // misma info pero en una ref, para leerla al soltar sin depender del ciclo de render
@@ -2233,6 +2257,14 @@ function TabMesas({ guests, setGuests, tablesConfig, setTablesConfig, deleteMesa
     if (guestId) moveTo(guestId, mesa);
   };
 
+  // Saca la posición (clientX/clientY) tanto de un evento de ratón como de uno táctil, para poder
+  // compartir la misma lógica de arrastre entre ordenador y móvil.
+  const posFromEvent = (e) => {
+    if (e.touches && e.touches.length) return { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    if (e.changedTouches && e.changedTouches.length) return { x: e.changedTouches[0].clientX, y: e.changedTouches[0].clientY };
+    return { x: e.clientX, y: e.clientY };
+  };
+
   // ── Arrastrar la posición de una mesa en el plano ──
   const startDragTable = (mesa, confirmada, e) => {
     if (confirmada) return;
@@ -2244,9 +2276,11 @@ function TabMesas({ guests, setGuests, tablesConfig, setTablesConfig, deleteMesa
     if (draggingMesa == null) return;
     const onMove = (e) => {
       if (!floorRef.current) return;
+      if (e.cancelable) e.preventDefault(); // evita que la página haga scroll mientras arrastras la mesa
       const rect = floorRef.current.getBoundingClientRect();
-      const x = Math.min(97, Math.max(3, ((e.clientX - rect.left) / rect.width) * 100));
-      const y = Math.min(97, Math.max(3, ((e.clientY - rect.top) / rect.height) * 100));
+      const { x: cx, y: cy } = posFromEvent(e);
+      const x = Math.min(97, Math.max(3, ((cx - rect.left) / rect.width) * 100));
+      const y = Math.min(97, Math.max(3, ((cy - rect.top) / rect.height) * 100));
       const next = { mesa: draggingMesa, x, y };
       dragPosRef.current = next;
       setDragPos(next);
@@ -2260,9 +2294,15 @@ function TabMesas({ guests, setGuests, tablesConfig, setTablesConfig, deleteMesa
     };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
+    window.addEventListener("touchmove", onMove, { passive: false });
+    window.addEventListener("touchend", onUp);
+    window.addEventListener("touchcancel", onUp);
     return () => {
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("touchmove", onMove);
+      window.removeEventListener("touchend", onUp);
+      window.removeEventListener("touchcancel", onUp);
     };
   }, [draggingMesa, tablesConfig]);
 
@@ -2279,9 +2319,11 @@ function TabMesas({ guests, setGuests, tablesConfig, setTablesConfig, deleteMesa
     if (draggingElemento == null) return;
     const onMove = (e) => {
       if (!floorRef.current) return;
+      if (e.cancelable) e.preventDefault();
       const rect = floorRef.current.getBoundingClientRect();
-      const x = Math.min(99, Math.max(1, ((e.clientX - rect.left) / rect.width) * 100));
-      const y = Math.min(99, Math.max(1, ((e.clientY - rect.top) / rect.height) * 100));
+      const { x: cx, y: cy } = posFromEvent(e);
+      const x = Math.min(99, Math.max(1, ((cx - rect.left) / rect.width) * 100));
+      const y = Math.min(99, Math.max(1, ((cy - rect.top) / rect.height) * 100));
       const next = { id: draggingElemento, x, y };
       dragPosElRef.current = next;
       setDragPosEl(next);
@@ -2295,9 +2337,15 @@ function TabMesas({ guests, setGuests, tablesConfig, setTablesConfig, deleteMesa
     };
     window.addEventListener("mousemove", onMove);
     window.addEventListener("mouseup", onUp);
+    window.addEventListener("touchmove", onMove, { passive: false });
+    window.addEventListener("touchend", onUp);
+    window.addEventListener("touchcancel", onUp);
     return () => {
       window.removeEventListener("mousemove", onMove);
       window.removeEventListener("mouseup", onUp);
+      window.removeEventListener("touchmove", onMove);
+      window.removeEventListener("touchend", onUp);
+      window.removeEventListener("touchcancel", onUp);
     };
   }, [draggingElemento, elementos]);
 
@@ -2550,7 +2598,9 @@ function TabMesas({ guests, setGuests, tablesConfig, setTablesConfig, deleteMesa
               e={e}
               pos={pos}
               dragging={draggingElemento === e.id}
+              scale={planoScale}
               onMouseDown={(ev) => startDragElemento(e.id, ev)}
+              onTouchStart={(ev) => startDragElemento(e.id, ev)}
             />
           );
         })}
@@ -2569,6 +2619,7 @@ function TabMesas({ guests, setGuests, tablesConfig, setTablesConfig, deleteMesa
               onDropMesa={onDropMesa}
               startDragTable={startDragTable}
               draggingMesa={draggingMesa}
+              scale={planoScale}
             />
           );
         })}
@@ -2580,19 +2631,21 @@ function TabMesas({ guests, setGuests, tablesConfig, setTablesConfig, deleteMesa
 // Etiqueta fija de un elemento del plano (portón, baños, caseta…), no interactiva.
 // Elemento del plano que no es una mesa (portón, árbol, baños, caseta) — arrastrable con el ratón,
 // igual que las mesas, para poder ajustarlo a como esté realmente la finca.
-function PlanoElemento({ e, pos, dragging, onMouseDown }) {
+function PlanoElemento({ e, pos, dragging, scale = 1, onMouseDown, onTouchStart }) {
   const soloIcono = !e.label;
   return (
     <div
       onMouseDown={onMouseDown}
+      onTouchStart={onTouchStart}
       title="Arrastra para mover"
       style={{
         position: "absolute", left: `${pos.x}%`, top: `${pos.y}%`, transform: "translate(-50%,-50%)",
         display: "flex", alignItems: "center", gap: 4, cursor: "grab", userSelect: "none",
+        touchAction: "none", // evita que el gesto se interprete como scroll de la página en móvil
         zIndex: dragging ? 40 : 15,
-        fontSize: soloIcono ? 34 : 11, fontWeight: 700, color: C.sub,
+        fontSize: (soloIcono ? 34 : 11) * scale, fontWeight: 700, color: C.sub,
         background: soloIcono ? "transparent" : "rgba(255,255,255,0.85)",
-        padding: soloIcono ? 0 : "3px 10px", borderRadius: soloIcono ? 0 : 20, whiteSpace: "nowrap",
+        padding: soloIcono ? 0 : `${3 * scale}px ${10 * scale}px`, borderRadius: soloIcono ? 0 : 20, whiteSpace: "nowrap",
         border: soloIcono ? "none" : `1px solid ${C.border}`,
       }}
     >
@@ -2606,11 +2659,11 @@ function PlanoElemento({ e, pos, dragging, onMouseDown }) {
 // y edita en las tarjetas de arriba (no hace falta asignar silla concreta), aunque también puedes
 // soltar aquí un invitado para asignarlo a esta mesa.
 function MesaCirculo({
-  t, pos, guests, dragOverMesa, onDragOverTarget, onDropMesa, startDragTable, draggingMesa,
+  t, pos, guests, dragOverMesa, onDragOverTarget, onDropMesa, startDragTable, draggingMesa, scale = 1,
 }) {
   const cap = Math.max(1, +t.capacidad || 1);
   const isNupcial = t.mesa === 1;
-  const size = isNupcial ? 86 : 74;
+  const size = (isNupcial ? 86 : 74) * scale;
   const asisten = guests.filter((g) => g.confirmado !== "No" && g.comida !== "No");
   const lleno = asisten.length > cap;
   const key = `mesa-${t.mesa}`;
@@ -2621,6 +2674,7 @@ function MesaCirculo({
       onDragOver={(e) => onDragOverTarget(e, key)}
       onDrop={(e) => onDropMesa(e, t.mesa, t.confirmada)}
       onMouseDown={(e) => startDragTable(t.mesa, t.confirmada, e)}
+      onTouchStart={(e) => startDragTable(t.mesa, t.confirmada, e)}
       style={{
         position: "absolute", left: `${pos.x}%`, top: `${pos.y}%`, transform: "translate(-50%,-50%)",
         width: size, height: size, borderRadius: "50%",
@@ -2628,13 +2682,14 @@ function MesaCirculo({
         border: `2px solid ${over ? C.rose : t.confirmada ? C.green : isNupcial ? C.amber : lleno ? C.red : C.border}`,
         boxShadow: over ? `0 0 0 4px ${C.roseLight}` : "0 1px 4px rgba(0,0,0,0.08)",
         display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column",
-        cursor: t.confirmada ? "default" : "grab", textAlign: "center", padding: 4,
+        cursor: t.confirmada ? "default" : "grab", textAlign: "center", padding: 4 * scale,
+        touchAction: "none", // evita que el gesto se interprete como scroll de la página en móvil
         zIndex: draggingMesa === t.mesa ? 30 : t.confirmada ? 5 : 10,
       }}
       title={t.confirmada ? "Mesa confirmada (bloqueada)" : "Arrastra para mover la mesa · suelta aquí un invitado para asignarlo"}
     >
-      <span style={{ fontSize: isNupcial ? 11 : 10, fontWeight: 700, color: t.confirmada ? C.green : C.text }}>{t.nombre}</span>
-      <span style={{ fontSize: 9, color: t.confirmada ? C.green : C.sub }}>{asisten.length}/{cap}</span>
+      <span style={{ fontSize: (isNupcial ? 11 : 10) * scale, fontWeight: 700, color: t.confirmada ? C.green : C.text }}>{t.nombre}</span>
+      <span style={{ fontSize: 9 * scale, color: t.confirmada ? C.green : C.sub }}>{asisten.length}/{cap}</span>
     </div>
   );
 }
@@ -2739,7 +2794,7 @@ function TabCuestionario({ bebidas, setBebidas, canciones, setCanciones, revisar
             </Card>
           )}
           <Card style={{ padding: 0, overflow: "hidden" }}>
-            <div style={{ overflowX: "auto" }}>
+            <div className="boda-scroll-x" style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead>
                   <tr>
@@ -2805,7 +2860,7 @@ function TabCuestionario({ bebidas, setBebidas, canciones, setCanciones, revisar
           )}
           <div style={{ fontSize: 12, color: C.sub, marginBottom: 8 }}>Mostrando {cancionesFiltradas.length} de {canciones.length}</div>
           <Card style={{ padding: 0, overflow: "hidden" }}>
-            <div style={{ overflowX: "auto", maxHeight: 560, overflowY: "auto" }}>
+            <div className="boda-scroll-x" style={{ overflowX: "auto", maxHeight: 560, overflowY: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse" }}>
                 <thead>
                   <tr>

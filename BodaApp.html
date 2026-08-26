@@ -398,16 +398,11 @@ const MESAS_LAYOUT_DEFAULT = {
   11: { x: 88, y: 69 },
   12: { x: 80, y: 92 }, // junto al árbol derecho
 };
-// Disposición "en cuadrícula" (como un tablero de ajedrez) que puedes aplicar de golpe a las mesas 1-11
-// desde el botón "🔲 Organizar en cuadrícula" de la pestaña Mesas: la nupcial arriba centrada, y debajo
-// tres filas (4 mesas, 3 mesas, 3 mesas). Las mesas que no estén en este mapa (si tuvierais alguna más)
-// no se tocan.
-const CUADRICULA_MESAS = {
-  1: { x: 50, y: 12 },
-  2: { x: 20, y: 38 }, 3: { x: 40, y: 38 }, 4: { x: 60, y: 38 }, 5: { x: 80, y: 38 },
-  6: { x: 25, y: 63 }, 7: { x: 50, y: 63 }, 8: { x: 75, y: 63 },
-  9: { x: 25, y: 88 }, 10: { x: 50, y: 88 }, 11: { x: 75, y: 88 },
-};
+// Disposición "en cuadrícula" (como un tablero de ajedrez) de las tarjetas donde asignáis invitados a
+// cada mesa, en la pestaña Mesas: la nupcial arriba centrada sola, y debajo tres filas fijas (4 mesas,
+// 3 mesas, 3 mesas). Cualquier mesa que no esté en esta lista (si tenéis alguna más) se muestra debajo,
+// en una cuadrícula normal que se ajusta sola al hueco disponible.
+const MESAS_FILAS_ASIGNACION = [[1], [2, 3, 4, 5], [6, 7, 8], [9, 10, 11]];
 
 // Aforo de partida por mesa (entre 8 y 11, la nupcial 12, según nos confirmaste) — editable por mesa
 // desde la propia pestaña de Mesas.
@@ -1275,11 +1270,22 @@ function TabFinanzas({ gastos, guests, pagos, devoluciones }) {
   const gastosPartidas = gastos.filter((g) => g.tipo !== "ingreso");
   const totalPres = gastosPartidas.reduce((s, g) => s + g.total, 0);
   const totalPaid = gastosPartidas.reduce((s, g) => s + (paidMap[g.id] || 0), 0);  // #1 pagado real
-  // El regalo de la familia de Marga (6.000€) ya no se cuenta aquí como "recurso pendiente": se gastó en
-  // el 50% del catering (ver pestaña Gastos) y por tanto ya está dentro de totalPaid. Solo queda como
-  // recurso todavía pendiente el regalo de la familia de Iván, confirmado para antes de la boda.
+  // Regalos ya recibidos en efectivo (familia de Marga, Yoya si la cobrasteis en mano, etc.) que NO han
+  // pasado por la cuenta BBVA Boda: se calcula en vivo como ingresos menos gastos de la cuenta
+  // "Efectivo", para que cuente automáticamente tanto lo recibido como lo que ya se haya gastado de ahí
+  // (p.ej. si el regalo de la familia de Marga se llega a usar en otra cosa, deja de contarse aquí solo
+  // porque ya estaría dentro de totalPaid). El regalo de Yoya que SÍ pasó por BBVA Boda no se repite
+  // aquí — ya suma directamente al saldo de la hucha (huchaOct, más abajo).
+  const tipoPorPartidaFin = {};
+  gastos.forEach((g) => { tipoPorPartidaFin[g.id] = g.tipo || "gasto"; });
+  const efectivoDisponible = pagos.filter((p) => /^efectivo$/i.test((p.cuenta || "").trim())).reduce((s, p) => {
+    const esIngreso = tipoPorPartidaFin[p.partida] === "ingreso";
+    return s + (esIngreso ? (+p.cantidad || 0) : -(+p.cantidad || 0));
+  }, 0);
+  // Solo queda como recurso todavía pendiente (no recibido) el regalo de la familia de Iván, confirmado
+  // para antes de la boda.
   const familias = 6918.45;
-  const cubierto = totalPaid + familias;
+  const cubierto = totalPaid + familias + efectivoDisponible;
   const pendienteReal = totalPres - cubierto;
   // Saldo real de la hucha boda proyectado a octubre — se recalcula en vivo desde el único registro que
   // existe ahora (los pagos, cada uno enlazado a una partida), en vez de quedarse fijo en un número que
@@ -1321,13 +1327,15 @@ function TabFinanzas({ gastos, guests, pagos, devoluciones }) {
 
       <Card title={`Cobertura financiera — ${fmt(totalPres)}`} style={{ marginBottom: 14 }}>
         <div style={{ height: 20, background: C.grayLight, borderRadius: 10, overflow: "hidden", display: "flex", marginBottom: 10 }}>
-          <div style={{ width: pct(totalPaid) + "%", background: C.teal }} title={`Pagado (incluye el regalo de la familia de Marga) ${fmt(totalPaid)}`} />
+          <div style={{ width: pct(totalPaid) + "%", background: C.teal }} title={`Pagado ${fmt(totalPaid)}`} />
+          <div style={{ width: pct(efectivoDisponible) + "%", background: C.amber }} title={`Efectivo ya recibido, sin gastar (familia Marga, etc.) ${fmt(efectivoDisponible)}`} />
           <div style={{ width: pct(6918.45) + "%", background: "#5DCAA5" }} title="Familia Iván (a confirmar fecha)" />
           <div style={{ width: pct(huchaOct) + "%", background: "#AFA9EC" }} title="Hucha boda oct" />
         </div>
         <div style={{ display: "flex", flexWrap: "wrap", gap: "5px 16px", fontSize: 11, color: C.sub }}>
           {[
-            [C.teal, `Pagado ${fmt(totalPaid)} (incluye regalo familia Marga)`],
+            [C.teal, `Pagado ${fmt(totalPaid)}`],
+            [C.amber, `Efectivo sin gastar ${fmt(efectivoDisponible)} (familia Marga, etc.)`],
             ["#5DCAA5", `Familia Iván ${fmt(6918.45)} (a confirmar fecha)`],
             ["#AFA9EC", `Hucha boda (oct) ${fmt(huchaOct)}`],
             [C.grayLight, `Sin cubrir ${fmt(gap)}`],
@@ -2294,25 +2302,6 @@ function TabMesas({ guests, setGuests, tablesConfig, setTablesConfig, deleteMesa
   const [newTable, setNewTable] = useState({ nombre: "", capacidad: 10 });
   const [editingTable, setEditingTable] = useState(null); // número de mesa en edición de nombre
   const [draftTable, setDraftTable] = useState({});
-  const floorRef = useRef(null);
-  // Escala del plano según el ancho real del contenedor: en el ordenador las mesas se ven a tamaño
-  // completo (700px de referencia), pero en un móvil estrecho el mismo plano mediría apenas 300-340px
-  // y los círculos (pensados en px fijos) se solaparían entre sí sin este ajuste.
-  const [planoScale, setPlanoScale] = useState(1);
-  useEffect(() => {
-    const el = floorRef.current;
-    if (!el || typeof ResizeObserver === "undefined") return;
-    const ro = new ResizeObserver((entries) => {
-      const w = entries[0]?.contentRect?.width;
-      if (w) setPlanoScale(Math.max(0.5, Math.min(1, w / 700)));
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
-  const [draggingMesa, setDraggingMesa] = useState(null); // mesa cuya posición se está arrastrando
-  const [dragPos, setDragPos] = useState(null); // { mesa, x, y } posición en vivo mientras se arrastra (solo para pintar)
-  const dragPosRef = useRef(null); // misma info pero en una ref, para leerla al soltar sin depender del ciclo de render
-
   const mesas = useMemo(() => [...tablesConfig].sort((a, b) => a.mesa - b.mesa), [tablesConfig]);
   const byMesa = useMemo(() => {
     const m = {};
@@ -2354,98 +2343,6 @@ function TabMesas({ guests, setGuests, tablesConfig, setTablesConfig, deleteMesa
     if (guestId) moveTo(guestId, mesa);
   };
 
-  // Saca la posición (clientX/clientY) tanto de un evento de ratón como de uno táctil, para poder
-  // compartir la misma lógica de arrastre entre ordenador y móvil.
-  const posFromEvent = (e) => {
-    if (e.touches && e.touches.length) return { x: e.touches[0].clientX, y: e.touches[0].clientY };
-    if (e.changedTouches && e.changedTouches.length) return { x: e.changedTouches[0].clientX, y: e.changedTouches[0].clientY };
-    return { x: e.clientX, y: e.clientY };
-  };
-
-  // ── Arrastrar la posición de una mesa en el plano ──
-  const startDragTable = (mesa, confirmada, e) => {
-    if (confirmada) return;
-    e.preventDefault();
-    e.stopPropagation();
-    setDraggingMesa(mesa);
-  };
-  useEffect(() => {
-    if (draggingMesa == null) return;
-    const onMove = (e) => {
-      if (!floorRef.current) return;
-      if (e.cancelable) e.preventDefault(); // evita que la página haga scroll mientras arrastras la mesa
-      const rect = floorRef.current.getBoundingClientRect();
-      const { x: cx, y: cy } = posFromEvent(e);
-      const x = Math.min(97, Math.max(3, ((cx - rect.left) / rect.width) * 100));
-      const y = Math.min(97, Math.max(3, ((cy - rect.top) / rect.height) * 100));
-      const next = { mesa: draggingMesa, x, y };
-      dragPosRef.current = next;
-      setDragPos(next);
-    };
-    const onUp = () => {
-      const dp = dragPosRef.current;
-      dragPosRef.current = null;
-      setDragPos(null);
-      setDraggingMesa(null);
-      if (dp) setTablesConfig(tablesConfig.map((t) => (t.mesa === dp.mesa ? { ...t, x: dp.x, y: dp.y } : t)));
-    };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-    window.addEventListener("touchmove", onMove, { passive: false });
-    window.addEventListener("touchend", onUp);
-    window.addEventListener("touchcancel", onUp);
-    return () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-      window.removeEventListener("touchmove", onMove);
-      window.removeEventListener("touchend", onUp);
-      window.removeEventListener("touchcancel", onUp);
-    };
-  }, [draggingMesa, tablesConfig]);
-
-  // ── Arrastrar la posición de un elemento del plano (portón, árboles, baños, caseta) ──
-  const [draggingElemento, setDraggingElemento] = useState(null); // id del elemento que se está arrastrando
-  const [dragPosEl, setDragPosEl] = useState(null); // { id, x, y } posición en vivo mientras se arrastra
-  const dragPosElRef = useRef(null);
-  const startDragElemento = (id, e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setDraggingElemento(id);
-  };
-  useEffect(() => {
-    if (draggingElemento == null) return;
-    const onMove = (e) => {
-      if (!floorRef.current) return;
-      if (e.cancelable) e.preventDefault();
-      const rect = floorRef.current.getBoundingClientRect();
-      const { x: cx, y: cy } = posFromEvent(e);
-      const x = Math.min(99, Math.max(1, ((cx - rect.left) / rect.width) * 100));
-      const y = Math.min(99, Math.max(1, ((cy - rect.top) / rect.height) * 100));
-      const next = { id: draggingElemento, x, y };
-      dragPosElRef.current = next;
-      setDragPosEl(next);
-    };
-    const onUp = () => {
-      const dp = dragPosElRef.current;
-      dragPosElRef.current = null;
-      setDragPosEl(null);
-      setDraggingElemento(null);
-      if (dp) setElementos(elementos.map((e) => (e.id === dp.id ? { ...e, x: dp.x, y: dp.y } : e)));
-    };
-    window.addEventListener("mousemove", onMove);
-    window.addEventListener("mouseup", onUp);
-    window.addEventListener("touchmove", onMove, { passive: false });
-    window.addEventListener("touchend", onUp);
-    window.addEventListener("touchcancel", onUp);
-    return () => {
-      window.removeEventListener("mousemove", onMove);
-      window.removeEventListener("mouseup", onUp);
-      window.removeEventListener("touchmove", onMove);
-      window.removeEventListener("touchend", onUp);
-      window.removeEventListener("touchcancel", onUp);
-    };
-  }, [draggingElemento, elementos]);
-
   // ── Gestión de mesas ──
   const nextMesaNum = () => {
     const usados = new Set(tablesConfig.map((t) => t.mesa));
@@ -2478,17 +2375,12 @@ function TabMesas({ guests, setGuests, tablesConfig, setTablesConfig, deleteMesa
   const toggleConfirmada = (mesa) => {
     setTablesConfig(tablesConfig.map((t) => (t.mesa === mesa ? { ...t, confirmada: !t.confirmada } : t)));
   };
-  // Coloca de golpe las mesas 1-11 en la disposición de cuadrícula (nupcial arriba centrada, filas de
-  // 4/3/3 debajo). Se aplica incluso a mesas ya "confirmadas" (es una acción a propósito, no un arrastre
-  // accidental) — las que no estén en el mapa (si hubiera alguna mesa extra) se quedan donde estaban.
-  const mesasFueraDeCuadricula = mesas.filter((t) => !CUADRICULA_MESAS[t.mesa]);
-  const organizarEnCuadricula = () => {
-    const aviso = mesasFueraDeCuadricula.length > 0
-      ? ` (${mesasFueraDeCuadricula.map((t) => t.nombre).join(", ")} no está${mesasFueraDeCuadricula.length > 1 ? "n" : ""} en la cuadrícula y no se tocará${mesasFueraDeCuadricula.length > 1 ? "n" : ""})`
-      : "";
-    if (!confirm(`¿Organizar las mesas 1-11 en cuadrícula (nupcial arriba, filas de 4-3-3 debajo)?${aviso}`)) return;
-    setTablesConfig(tablesConfig.map((t) => (CUADRICULA_MESAS[t.mesa] ? { ...t, ...CUADRICULA_MESAS[t.mesa] } : t)));
-  };
+  // Las tarjetas de asignación (más abajo) ya se agrupan solas en la disposición de cuadrícula
+  // (MESAS_FILAS_ASIGNACION) — mesas que no aparezcan en esa lista se muestran aparte, en su propia
+  // cuadrícula que se ajusta al hueco disponible.
+  const mesasEnCuadricula = new Set(MESAS_FILAS_ASIGNACION.flat());
+  const filasAsignacion = MESAS_FILAS_ASIGNACION.map((fila) => fila.map((n) => mesas.find((t) => t.mesa === n)).filter(Boolean));
+  const mesasFueraDeCuadricula = mesas.filter((t) => !mesasEnCuadricula.has(t.mesa));
 
   const chipStyle = (g, small) => {
     const declined = g.confirmado === "No" || g.comida === "No";
@@ -2524,6 +2416,90 @@ function TabMesas({ guests, setGuests, tablesConfig, setTablesConfig, deleteMesa
     return Object.entries(porFamilia).filter(([, s]) => s.size > 1).map(([fam]) => fam);
   }, [guests]);
 
+  // Tarjeta de una mesa — dónde se ve y edita quién se sienta en ella (arrastra chapas de invitados
+  // aquí dentro, o suéltalas para quitarlas). Es una función normal (no un componente aparte) porque
+  // usa un montón de estado y handlers ya definidos arriba en TabMesas.
+  const renderMesaCard = (t) => {
+    const gs = byMesa[t.mesa] || [];
+    const cap = Math.max(1, +t.capacidad || 1);
+    const asisten = gs.filter((g) => g.confirmado !== "No" && g.comida !== "No");
+    const lleno = asisten.length > cap;
+    const isEd = editingTable === t.mesa;
+    const over = dragOverMesa === `mesa-${t.mesa}`;
+    return (
+      <Card
+        key={t.mesa}
+        style={{
+          background: t.confirmada ? C.greenLight : C.card,
+          border: `1.5px ${over ? "dashed" : "solid"} ${over ? C.rose : t.confirmada ? C.green : lleno ? C.red : C.border}`,
+          boxShadow: over ? `0 0 0 3px ${C.roseLight}` : "none",
+        }}
+        onDragOver={(e) => onDragOverTarget(e, `mesa-${t.mesa}`)}
+        onDrop={(e) => onDropMesa(e, t.mesa, t.confirmada)}
+      >
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6, gap: 6, flexWrap: "wrap" }}>
+          {isEd ? (
+            <div style={{ display: "flex", gap: 4, alignItems: "center", flex: 1, minWidth: 0 }}>
+              <Input value={draftTable.nombre} onChange={(v) => setDraftTable({ ...draftTable, nombre: v })} style={{ flex: 1, minWidth: 0 }} />
+              <Btn small variant="primary" onClick={saveEditTable}>✓</Btn>
+              <Btn small variant="ghost" onClick={() => setEditingTable(null)}>✕</Btn>
+            </div>
+          ) : (
+            <>
+              <span style={{ fontSize: 14, fontWeight: 700, color: t.confirmada ? C.green : C.text }}>{t.nombre}</span>
+              <Btn small variant="ghost" disabled={t.confirmada} onClick={() => startEditTable(t)}>✎</Btn>
+            </>
+          )}
+        </div>
+
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 8 }}>
+          <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12 }}>
+            Aforo
+            <input
+              type="number" min={1} value={t.capacidad} disabled={t.confirmada}
+              onChange={(e) => updateCapacidad(t.mesa, e.target.value)}
+              style={{ width: 46, fontSize: 12, padding: "3px 5px", border: `1px solid ${C.border}`, borderRadius: 6, background: t.confirmada ? C.grayLight : "#fff" }}
+            />
+          </span>
+          <Badge color={lleno ? "red" : "teal"}>{asisten.length}/{t.capacidad}</Badge>
+          {lleno && <Badge color="red">⚠</Badge>}
+        </div>
+
+        <div style={{ lineHeight: 1.9, minHeight: 34, marginBottom: 8 }}>
+          {gs.length === 0 ? (
+            <span style={{ fontSize: 11, color: C.sub, fontStyle: "italic" }}>Arrastra invitados aquí</span>
+          ) : gs.map((g) => (
+            <span
+              key={g.id}
+              draggable
+              onDragStart={(e) => onDragStartChip(e, g.id)}
+              onDragEnd={onDragEndChip}
+              style={chipStyle(g)}
+              onClick={() => setMoving(moving === g.id ? null : g.id)}
+              title={g.familia ? `Familia: ${familiaLabel(familias, g.familia)}` : undefined}
+            >
+              {g.n}
+            </span>
+          ))}
+        </div>
+
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+          <Btn
+            small
+            variant={t.confirmada ? "teal" : "primary"}
+            onClick={() => toggleConfirmada(t.mesa)}
+            style={t.confirmada ? { background: C.greenLight, color: C.green } : {}}
+          >
+            {t.confirmada ? "✓ Confirmada" : "Confirmar"}
+          </Btn>
+          {gs.length === 0 && !t.confirmada && (
+            <Btn small variant="ghost" onClick={() => removeTable(t.mesa)}>🗑</Btn>
+          )}
+        </div>
+      </Card>
+    );
+  };
+
   return (
     <div>
       <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginBottom: 12, alignItems: "center" }}>
@@ -2533,7 +2509,6 @@ function TabMesas({ guests, setGuests, tablesConfig, setTablesConfig, deleteMesa
         {sinMesa.length > 0 && <Badge color="purple">{sinMesa.length} sin asignar</Badge>}
         {mesasConfirmadas > 0 && <Badge color="green">{mesasConfirmadas}/{mesas.length} mesas confirmadas</Badge>}
         <div style={{ flex: 1 }} />
-        <Btn small onClick={organizarEnCuadricula} title="Coloca las mesas 1-11 en filas fijas: nupcial arriba centrada, luego 4-3-3">🔲 Organizar en cuadrícula</Btn>
         <Btn small variant="primary" onClick={() => setAddingTable(!addingTable)}>{addingTable ? "Cancelar" : "+ Nueva mesa"}</Btn>
       </div>
 
@@ -2605,200 +2580,29 @@ function TabMesas({ guests, setGuests, tablesConfig, setTablesConfig, deleteMesa
         </div>
       </div>
 
-      {/* ── Mesas: de un vistazo, quién hay en cada una — arrastra las chapas entre tarjetas para moverlos ── */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(230px, 1fr))", gap: 12, marginBottom: 16 }}>
-        {mesas.map((t) => {
-          const gs = byMesa[t.mesa] || [];
-          const cap = Math.max(1, +t.capacidad || 1);
-          const asisten = gs.filter((g) => g.confirmado !== "No" && g.comida !== "No");
-          const lleno = asisten.length > cap;
-          const isEd = editingTable === t.mesa;
-          const over = dragOverMesa === `mesa-${t.mesa}`;
-          return (
-            <Card
-              key={t.mesa}
-              style={{
-                background: t.confirmada ? C.greenLight : C.card,
-                border: `1.5px ${over ? "dashed" : "solid"} ${over ? C.rose : t.confirmada ? C.green : lleno ? C.red : C.border}`,
-                boxShadow: over ? `0 0 0 3px ${C.roseLight}` : "none",
-              }}
-              onDragOver={(e) => onDragOverTarget(e, `mesa-${t.mesa}`)}
-              onDrop={(e) => onDropMesa(e, t.mesa, t.confirmada)}
-            >
-              <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6, gap: 6, flexWrap: "wrap" }}>
-                {isEd ? (
-                  <div style={{ display: "flex", gap: 4, alignItems: "center", flex: 1, minWidth: 0 }}>
-                    <Input value={draftTable.nombre} onChange={(v) => setDraftTable({ ...draftTable, nombre: v })} style={{ flex: 1, minWidth: 0 }} />
-                    <Btn small variant="primary" onClick={saveEditTable}>✓</Btn>
-                    <Btn small variant="ghost" onClick={() => setEditingTable(null)}>✕</Btn>
-                  </div>
-                ) : (
-                  <>
-                    <span style={{ fontSize: 14, fontWeight: 700, color: t.confirmada ? C.green : C.text }}>{t.nombre}</span>
-                    <Btn small variant="ghost" disabled={t.confirmada} onClick={() => startEditTable(t)}>✎</Btn>
-                  </>
-                )}
+      {/* ── Mesas: de un vistazo, quién hay en cada una — arrastra las chapas entre tarjetas para
+          moverlos. Organizadas en cuadrícula fija (como un tablero): la nupcial arriba sola y
+          centrada, luego filas de 4, 3 y 3 mesas debajo ── */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 16 }}>
+        {filasAsignacion.map((fila, i) => (
+          fila.length > 0 && (
+            i === 0 ? (
+              <div key={i} style={{ display: "flex", justifyContent: "center" }}>
+                <div style={{ width: "100%", maxWidth: 260 }}>{fila.map(renderMesaCard)}</div>
               </div>
-
-              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center", marginBottom: 8 }}>
-                <span style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 12 }}>
-                  Aforo
-                  <input
-                    type="number" min={1} value={t.capacidad} disabled={t.confirmada}
-                    onChange={(e) => updateCapacidad(t.mesa, e.target.value)}
-                    style={{ width: 46, fontSize: 12, padding: "3px 5px", border: `1px solid ${C.border}`, borderRadius: 6, background: t.confirmada ? C.grayLight : "#fff" }}
-                  />
-                </span>
-                <Badge color={lleno ? "red" : "teal"}>{asisten.length}/{t.capacidad}</Badge>
-                {lleno && <Badge color="red">⚠</Badge>}
+            ) : (
+              <div key={i} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 12 }}>
+                {fila.map(renderMesaCard)}
               </div>
-
-              <div style={{ lineHeight: 1.9, minHeight: 34, marginBottom: 8 }}>
-                {gs.length === 0 ? (
-                  <span style={{ fontSize: 11, color: C.sub, fontStyle: "italic" }}>Arrastra invitados aquí</span>
-                ) : gs.map((g) => (
-                  <span
-                    key={g.id}
-                    draggable
-                    onDragStart={(e) => onDragStartChip(e, g.id)}
-                    onDragEnd={onDragEndChip}
-                    style={chipStyle(g)}
-                    onClick={() => setMoving(moving === g.id ? null : g.id)}
-                    title={g.familia ? `Familia: ${familiaLabel(familias, g.familia)}` : undefined}
-                  >
-                    {g.n}
-                  </span>
-                ))}
-              </div>
-
-              <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-                <Btn
-                  small
-                  variant={t.confirmada ? "teal" : "primary"}
-                  onClick={() => toggleConfirmada(t.mesa)}
-                  style={t.confirmada ? { background: C.greenLight, color: C.green } : {}}
-                >
-                  {t.confirmada ? "✓ Confirmada" : "Confirmar"}
-                </Btn>
-                {gs.length === 0 && !t.confirmada && (
-                  <Btn small variant="ghost" onClick={() => removeTable(t.mesa)}>🗑</Btn>
-                )}
-              </div>
-            </Card>
-          );
-        })}
+            )
+          )
+        ))}
+        {mesasFueraDeCuadricula.length > 0 && (
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(230px, 1fr))", gap: 12 }}>
+            {mesasFueraDeCuadricula.map(renderMesaCard)}
+          </div>
+        )}
       </div>
-
-      {/* ── Plano de la finca (referencia visual — ajusta aquí la posición de mesas y elementos) ── */}
-      <div
-        ref={floorRef}
-        style={{
-          position: "relative", width: "100%", paddingTop: "85%", marginBottom: 16,
-          background: "linear-gradient(180deg, #EFF6EE 0%, #E7F2E4 100%)",
-          border: `1px solid ${C.border}`, borderRadius: 16, overflow: "visible",
-        }}
-      >
-        {/* Elementos del plano (portón, árboles, baños, caseta) — arrastrables para ajustarlos a la finca */}
-        {elementos.map((e) => {
-          const pos = dragPosEl && dragPosEl.id === e.id ? dragPosEl : e;
-          return (
-            <PlanoElemento
-              key={e.id}
-              e={e}
-              pos={pos}
-              dragging={draggingElemento === e.id}
-              scale={planoScale}
-              onMouseDown={(ev) => startDragElemento(e.id, ev)}
-              onTouchStart={(ev) => startDragElemento(e.id, ev)}
-            />
-          );
-        })}
-
-        {mesas.map((t) => {
-          const pos = dragPos && dragPos.mesa === t.mesa ? dragPos : t;
-          const gs = byMesa[t.mesa] || [];
-          return (
-            <MesaCirculo
-              key={t.mesa}
-              t={t}
-              pos={pos}
-              guests={gs}
-              dragOverMesa={dragOverMesa}
-              onDragOverTarget={onDragOverTarget}
-              onDropMesa={onDropMesa}
-              startDragTable={startDragTable}
-              draggingMesa={draggingMesa}
-              scale={planoScale}
-            />
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-// Etiqueta fija de un elemento del plano (portón, baños, caseta…), no interactiva.
-// Elemento del plano que no es una mesa (portón, árbol, baños, caseta) — arrastrable con el ratón,
-// igual que las mesas, para poder ajustarlo a como esté realmente la finca.
-function PlanoElemento({ e, pos, dragging, scale = 1, onMouseDown, onTouchStart }) {
-  const soloIcono = !e.label;
-  return (
-    <div
-      onMouseDown={onMouseDown}
-      onTouchStart={onTouchStart}
-      title="Arrastra para mover"
-      style={{
-        position: "absolute", left: `${pos.x}%`, top: `${pos.y}%`, transform: "translate(-50%,-50%)",
-        display: "flex", alignItems: "center", gap: 4, cursor: "grab", userSelect: "none",
-        touchAction: "none", // evita que el gesto se interprete como scroll de la página en móvil
-        zIndex: dragging ? 40 : 15,
-        fontSize: (soloIcono ? 34 : 11) * scale, fontWeight: 700, color: C.sub,
-        background: soloIcono ? "transparent" : "rgba(255,255,255,0.85)",
-        padding: soloIcono ? 0 : `${3 * scale}px ${10 * scale}px`, borderRadius: soloIcono ? 0 : 20, whiteSpace: "nowrap",
-        border: soloIcono ? "none" : `1px solid ${C.border}`,
-      }}
-    >
-      {e.icon}{e.label ? ` ${e.label}` : ""}
-    </div>
-  );
-}
-
-// Una mesa circular, posicionada en el plano y arrastrable (si no está confirmada) — es solo una
-// referencia visual de dónde queda cada mesa en la finca. La lista de invitados de cada mesa se ve
-// y edita en las tarjetas de arriba (no hace falta asignar silla concreta), aunque también puedes
-// soltar aquí un invitado para asignarlo a esta mesa.
-function MesaCirculo({
-  t, pos, guests, dragOverMesa, onDragOverTarget, onDropMesa, startDragTable, draggingMesa, scale = 1,
-}) {
-  const cap = Math.max(1, +t.capacidad || 1);
-  const isNupcial = t.mesa === 1;
-  const size = (isNupcial ? 86 : 74) * scale;
-  const asisten = guests.filter((g) => g.confirmado !== "No" && g.comida !== "No");
-  const lleno = asisten.length > cap;
-  const key = `mesa-${t.mesa}`;
-  const over = dragOverMesa === key;
-
-  return (
-    <div
-      onDragOver={(e) => onDragOverTarget(e, key)}
-      onDrop={(e) => onDropMesa(e, t.mesa, t.confirmada)}
-      onMouseDown={(e) => startDragTable(t.mesa, t.confirmada, e)}
-      onTouchStart={(e) => startDragTable(t.mesa, t.confirmada, e)}
-      style={{
-        position: "absolute", left: `${pos.x}%`, top: `${pos.y}%`, transform: "translate(-50%,-50%)",
-        width: size, height: size, borderRadius: "50%",
-        background: t.confirmada ? C.greenLight : isNupcial ? C.amberLight : C.card,
-        border: `2px solid ${over ? C.rose : t.confirmada ? C.green : isNupcial ? C.amber : lleno ? C.red : C.border}`,
-        boxShadow: over ? `0 0 0 4px ${C.roseLight}` : "0 1px 4px rgba(0,0,0,0.08)",
-        display: "flex", alignItems: "center", justifyContent: "center", flexDirection: "column",
-        cursor: t.confirmada ? "default" : "grab", textAlign: "center", padding: 4 * scale,
-        touchAction: "none", // evita que el gesto se interprete como scroll de la página en móvil
-        zIndex: draggingMesa === t.mesa ? 30 : t.confirmada ? 5 : 10,
-      }}
-      title={t.confirmada ? "Mesa confirmada (bloqueada)" : "Arrastra para mover la mesa · suelta aquí un invitado para asignarlo"}
-    >
-      <span style={{ fontSize: (isNupcial ? 11 : 10) * scale, fontWeight: 700, color: t.confirmada ? C.green : C.text }}>{t.nombre}</span>
-      <span style={{ fontSize: 9 * scale, color: t.confirmada ? C.green : C.sub }}>{asisten.length}/{cap}</span>
     </div>
   );
 }

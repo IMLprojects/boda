@@ -89,7 +89,7 @@
   // Bloques que debería tener un estado completo de la app. Se usa solo para decidir, entre la copia
   // local y la de la hoja, cuál está más completa — nunca para leer/escribir datos de verdad.
   const BODA_CLAVES_ESPERADAS = [
-    "gastos", "guests", "pagos", "tablesConfig", "mesasEliminadas",
+    "gastos", "guests", "pagos", "devoluciones", "tablesConfig", "mesasEliminadas",
     "elementos", "familias", "bebidas", "canciones", "revisar",
   ];
   // Cuenta cuántos de esos bloques tiene el objeto Y con contenido de verdad (no vacío), para poder
@@ -312,20 +312,20 @@ const GUESTS_INIT = [
   { n: "Sonia", sex: "Mujer", desp: "Marga", comida: "Ou", mesa: 12, confirmado: "Si", familia: "F17", origen: "Formulario" },
 ].map((g, i) => ({ ...g, id: "guest_" + i }));
 
-// Nota: el importe de "Solicitar préstamo padres" ya NO se usa — se sustituye en el render por el KPI
-// "Préstamo necesario" (gap), que se recalcula en vivo con los gastos/pagos/invitados actuales. El 11.107
-// de aquí quedó desactualizado (se calculó antes de confirmar el coste real de la luna de miel y conciliar
-// la hucha con el saldo del banco), por eso no coincidía con el KPI de arriba.
+// Nota: el importe de "Préstamo adicional (si hace falta)" y de "Resto catering + confirmar invitados"
+// ya NO se usan tal cual — se sustituyen en el render por el KPI "Préstamo adicional necesario" (gap) y
+// por el pendiente real de la partida Catering, que se recalculan en vivo con los gastos/pagos/invitados
+// actuales. Los números de aquí quedaron desactualizados y ya no se usan salvo como valor de respaldo.
 const PAGOS_HITOS = [
-  { hito: "Solicitar préstamo padres", fecha: "Antes de julio 2026", importe: 11107, tipo: "purple" },
+  { hito: "Catering 50% señal (préstamo padres)", fecha: "11 agosto 2026 · ya realizado", importe: 7919.73, tipo: "amber" },
+  { hito: "Préstamo adicional (si hace falta)", fecha: "Antes de julio 2026", importe: 11107, tipo: "purple" },
   { hito: "Reserva luna de miel (resto)", fecha: "Antes de julio 2026", importe: 8000, tipo: "purple" },
-  { hito: "Catering — 50% señal", fecha: "10 agosto 2026", importe: 8263, tipo: "amber" },
   { hito: "Resto decoración", fecha: "1 octubre 2026", importe: 1395, tipo: "red" },
   { hito: "Resto catering + confirmar invitados", fecha: "2 octubre 2026", importe: 8263, tipo: "red" },
 ];
 
 // Cuentas: personales (pendiente devolver) vs cuenta compartida de la boda
-const CUENTAS = ["BBVA Boda", "Trade Republic Iván", "Caixa Marga", "Efectivo", "Otra"];
+const CUENTAS = ["BBVA Boda", "Trade Republic Iván", "Caixa Marga", "Efectivo", "Préstamo padres", "Otra"];
 const METODOS = ["Transferencia", "Tarjeta", "Efectivo", "Bizum", "Otro"];
 // Situación de un pago: "Planificado" = todavía no se ha hecho de verdad, pero lo metes para ver cómo
 // afectaría a las huchas y al préstamo si lo hicierais así (sirve para comparar escenarios antes de decidir).
@@ -337,10 +337,17 @@ const SITUACION_PAGO_OPTS = [
 ];
 // Una cuenta personal implica que ese pago está pendiente de devolver desde la hucha boda
 const cuentaPersona = (cuenta) => {
+  if (/padres|préstamo|prestamo/i.test(cuenta)) return "Padres";
   if (/iván|ivan|trade republic/i.test(cuenta)) return "Iván";
   if (/marga|caixa/i.test(cuenta)) return "Marga";
   return null; // BBVA Boda / compartida
 };
+// Lista de deudores para las tarjetas "pendiente de devolver": Iván/Marga son cuentas personales que
+// adelantan dinero, "Padres" es el préstamo de los padres de Iván (11/08/2026, 7.919,73€ del catering).
+const DEUDORES = ["Iván", "Marga", "Padres"];
+// Registro de devoluciones (pagos parciales para saldar lo que se debe a Iván, Marga o a los padres).
+// Vive aparte de "pagos" porque no es un gasto de la boda, es un movimiento interno entre cuentas.
+const DEVOLUCIONES_INIT = [];
 
 // Registro 1 — Pagos a proveedores (cada uno enlazado a su partida del presupuesto)
 const PAGOS_INIT = [
@@ -364,8 +371,7 @@ const PAGOS_INIT = [
   // representa como un "pago" a la partida "Regalos" (g17, tipo ingreso) — la cantidad SUMA a la
   // hucha en vez de restar, porque saldoRealHucha() mira el tipo de la partida, no el signo a mano.
   { concepto: "Regalo Yoya",           cantidad: 800,  fecha: "2026-06-20", metodo: "Efectivo",      cuenta: "BBVA Boda",           partida: "g17", comentario: "" },
-  { concepto: "Catering 50% señal (con el regalo en efectivo de la familia de Marga)", cantidad: 6000, fecha: "2026-08-11", metodo: "Efectivo", cuenta: "Efectivo", partida: "g1", comentario: "Regalo de la familia de Marga, ya recibido en efectivo", situacion: "Planificado" },
-  { concepto: "Catering 50% señal (resto desde la hucha boda)",                        cantidad: 2263, fecha: "2026-08-11", metodo: "Transferencia", cuenta: "BBVA Boda", partida: "g1", comentario: "", situacion: "Planificado" },
+  { concepto: "Catering 50% señal (préstamo padres de Iván)", cantidad: 7919.73, fecha: "2026-08-11", metodo: "Transferencia", cuenta: "Préstamo padres", partida: "g1", comentario: "Sustituye a los dos pagos planificados anteriores (regalo familia Marga + hucha boda)", situacion: "Realizado" },
 ].map((p, i) => ({ ...p, id: "pago_" + i }));
 
 const MESES_ORDEN = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
@@ -392,6 +398,17 @@ const MESAS_LAYOUT_DEFAULT = {
   11: { x: 88, y: 69 },
   12: { x: 80, y: 92 }, // junto al árbol derecho
 };
+// Disposición "en cuadrícula" (como un tablero de ajedrez) que puedes aplicar de golpe a las mesas 1-11
+// desde el botón "🔲 Organizar en cuadrícula" de la pestaña Mesas: la nupcial arriba centrada, y debajo
+// tres filas (4 mesas, 3 mesas, 3 mesas). Las mesas que no estén en este mapa (si tuvierais alguna más)
+// no se tocan.
+const CUADRICULA_MESAS = {
+  1: { x: 50, y: 12 },
+  2: { x: 20, y: 38 }, 3: { x: 40, y: 38 }, 4: { x: 60, y: 38 }, 5: { x: 80, y: 38 },
+  6: { x: 25, y: 63 }, 7: { x: 50, y: 63 }, 8: { x: 75, y: 63 },
+  9: { x: 25, y: 88 }, 10: { x: 50, y: 88 }, 11: { x: 75, y: 88 },
+};
+
 // Aforo de partida por mesa (entre 8 y 11, la nupcial 12, según nos confirmaste) — editable por mesa
 // desde la propia pestaña de Mesas.
 const MESAS_CAPACIDAD_DEFAULT = { 1: 12, 2: 10, 3: 9, 4: 9, 5: 10, 6: 8, 7: 8, 8: 9, 9: 8, 10: 10, 11: 8, 12: 11, 13: 8 };
@@ -1245,10 +1262,14 @@ function LineChartSVG({ series, height = 230, hoyMes, detalleMes }) {
   );
 }
 
-function TabFinanzas({ gastos, guests, pagos }) {
+function TabFinanzas({ gastos, guests, pagos, devoluciones }) {
   const [luna, setLuna] = useState(9848); // coste final ya confirmado de la luna de miel
 
   const paidMap = pagadoPorPartida(pagos);
+  // Lo que ya se debe a los padres de Iván (préstamo del 11/08/2026 para el catering) menos lo que ya
+  // se les haya ido devolviendo — mismo cálculo que en la pestaña Gastos, aquí solo para el aviso.
+  const debePadres = Math.max(0, pagos.filter((p) => cuentaPersona(p.cuenta) === "Padres").reduce((s, p) => s + (+p.cantidad || 0), 0)
+    - (devoluciones || []).filter((d) => d.quien === "Padres").reduce((s, d) => s + (+d.cantidad || 0), 0));
   // Los KPIs de presupuesto/pagado solo cuentan partidas de tipo "gasto" — los "ingresos" (p.ej.
   // "Regalos") no son un gasto que haya que cubrir, así que no deben inflar el presupuesto total.
   const gastosPartidas = gastos.filter((g) => g.tipo !== "ingreso");
@@ -1266,6 +1287,8 @@ function TabFinanzas({ gastos, guests, pagos }) {
   const serieBoda = saldoRealHucha("Boda", pagos, gastos);
   const huchaOct = (serieBoda.find((d) => d.mes === "Oct") || {}).saldo || 0;
   const gap = Math.max(0, pendienteReal - huchaOct);
+  // Pendiente real de la partida Catering (para el hito "Resto catering"), en vivo desde sus pagos.
+  const restoCatering = Math.max(0, ((gastos.find((g) => g.id === "g1") || {}).total || 0) - (paidMap["g1"] || 0));
   // Detalle de pagos/aportaciones por mes, para el tooltip de la gráfica (qué se movió ese mes).
   const detalleBoda = detallePorMesHucha("Boda", pagos, gastos);
 
@@ -1277,8 +1300,11 @@ function TabFinanzas({ gastos, guests, pagos }) {
 
   const ahorroLuna = 9848 - luna;
   const prestamoAjustado = Math.max(0, gap - ahorroLuna);
-  const scBase = regalosMin - prestamoAjustado;
-  const scCons = regalosMin - gap;
+  // Lo que hay que devolver en total con los sobres de la boda: lo ya prestado por los padres
+  // (debePadres) más el préstamo adicional (si hiciera falta cubrir el resto del presupuesto).
+  const prestamoTotal = debePadres + prestamoAjustado;
+  const scBase = regalosMin - prestamoTotal;
+  const scCons = regalosMin - (debePadres + gap);
 
   const pct = (x) => ((x / totalPres) * 100).toFixed(1);
 
@@ -1288,8 +1314,9 @@ function TabFinanzas({ gastos, guests, pagos }) {
         <KPI label="Presupuesto total" value={fmt(totalPres)} sub={`${gastosPartidas.length} partidas`} color={C.rose} />
         <KPI label="Cubierto" value={fmt(cubierto)} sub={`${pct(cubierto)}% del total`} color={C.teal} />
         <KPI label="Pendiente real" value={fmt(pendienteReal)} sub={`${pct(pendienteReal)}% restante`} color={C.red} />
-        <KPI label="Préstamo necesario" value={fmt(gap)} sub="A devolver con regalos" color={C.purple} />
+        <KPI label="Préstamo adicional necesario" value={fmt(gap)} sub="Por encima del préstamo padres ya pedido" color={C.purple} />
         <KPI label="Regalos estimados" value={fmt(regalosMin)} sub={`${nAdultos} adultos × ${fmt(180)} · ${nConfirmados} confirm.`} color={C.teal} />
+        <KPI label="Debéis a los padres" value={fmt(debePadres)} sub="Préstamo catering, 11 ago 2026" color={C.amber} />
       </div>
 
       <Card title={`Cobertura financiera — ${fmt(totalPres)}`} style={{ marginBottom: 14 }}>
@@ -1337,11 +1364,11 @@ function TabFinanzas({ gastos, guests, pagos }) {
           <div>
             <div style={{ fontSize: 12, color: C.sub, marginBottom: 12 }}>Flujo de caja previsto</div>
             {[
-              { icon: "🤝", date: "Antes de julio", title: "Pedir préstamo a los padres", amt: `+${fmt(prestamoAjustado)}`, color: C.purple },
+              { icon: "✅", date: "11 agosto — ya hecho", title: "Catering 50% señal (préstamo padres)", amt: `–${fmt(7919.73)}`, color: C.amber },
+              { icon: "🤝", date: "Si hace falta", title: "Préstamo adicional (más allá del de los padres)", amt: `+${fmt(prestamoAjustado)}`, color: C.purple },
               { icon: "✈️", date: "Antes de julio", title: `Cerrar luna de miel (${fmt(luna)})`, amt: `–${fmt(luna - 2000)} restante`, color: C.purple },
-              { icon: "📋", date: "10 agosto", title: "Catering 50% señal", amt: `–${fmt(8263)}`, color: C.amber },
               { icon: "🎊", date: "Octubre — boda", title: "Resto pagos + sobres", amt: `+${fmt(regalosMin)} regalos`, color: C.teal },
-              { icon: "✅", date: "Tras la boda", title: "Devolver préstamo", amt: `–${fmt(prestamoAjustado)} · sobran ${fmt(scBase)}`, color: C.green },
+              { icon: "✅", date: "Tras la boda", title: "Devolver préstamo(s)", amt: `–${fmt(prestamoTotal)} · sobran ${fmt(scBase)}`, color: C.green },
             ].map((s, i) => (
               <div key={i} style={{ display: "flex", gap: 12, paddingBottom: i < 4 ? 14 : 0, alignItems: "flex-start" }}>
                 <div style={{ width: 32, height: 32, borderRadius: "50%", background: C.grayLight, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, flexShrink: 0 }}>{s.icon}</div>
@@ -1373,7 +1400,7 @@ function TabFinanzas({ gastos, guests, pagos }) {
               </div>
             </div>
             <div style={{ marginTop: 12, padding: "10px 14px", background: C.grayLight, borderRadius: 8, fontSize: 12, color: C.sub }}>
-              <strong style={{ color: C.text }}>Todos los escenarios devuelven el préstamo íntegro.</strong> Los KPIs se recalculan automáticamente al editar gastos o invitados.
+              <strong style={{ color: C.text }}>Todos los escenarios devuelven íntegros tanto el préstamo de los padres ({fmt(debePadres)}) como el adicional, si hiciera falta.</strong> Los KPIs se recalculan automáticamente al editar gastos, pagos o invitados.
             </div>
           </div>
         </div>
@@ -1381,9 +1408,12 @@ function TabFinanzas({ gastos, guests, pagos }) {
 
       <Card title="📅 Próximos hitos de pago">
         {PAGOS_HITOS.map((p, i) => {
-          // El importe del préstamo a pedir se recalcula en vivo (KPI "Préstamo necesario" de arriba) en
-          // vez de quedarse fijo en el valor con el que se calculó por primera vez este hito.
-          const importe = p.hito === "Solicitar préstamo padres" ? gap : p.importe;
+          // El importe del préstamo adicional y del resto de catering se recalculan en vivo (KPI
+          // "Préstamo adicional necesario" y pendiente real de Catering) en vez de quedarse fijos en el
+          // valor con el que se calcularon por primera vez estos hitos.
+          const importe = p.hito === "Préstamo adicional (si hace falta)" ? gap
+            : p.hito === "Resto catering + confirmar invitados" ? restoCatering
+            : p.importe;
           const colors = { purple: [C.purpleLight, C.purple], amber: [C.amberLight, C.amber], red: [C.redLight, C.red] };
           const [bg, fg] = colors[p.tipo];
           return (
@@ -1397,6 +1427,63 @@ function TabFinanzas({ gastos, guests, pagos }) {
           );
         })}
       </Card>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────
+// Panel de devoluciones — dentro de la tarjeta "Pendiente de devolver": una fila por cada deudor
+// (Iván, Marga, Padres) con lo que aún se le debe, un botón para ir registrando devoluciones parciales
+// (no hace falta devolverlo todo de golpe) y el historial de lo ya devuelto a cada uno.
+// ─────────────────────────────────────────────────────────
+function DevolucionesPanel({ deudas, devoluciones, setDevoluciones }) {
+  const [abiertoPara, setAbiertoPara] = useState(null); // "Iván" | "Marga" | "Padres" | null
+  const [draft, setDraft] = useState({ cantidad: "", fecha: "", comentario: "" });
+
+  const abrir = (quien) => { setAbiertoPara(quien); setDraft({ cantidad: "", fecha: "", comentario: "" }); };
+  const guardar = (quien) => {
+    const cantidad = +draft.cantidad || 0;
+    if (cantidad <= 0) return;
+    const nueva = { id: "dev_" + Date.now(), quien, cantidad, fecha: draft.fecha || "", comentario: draft.comentario || "" };
+    setDevoluciones([...(devoluciones || []), nueva]);
+    setAbiertoPara(null);
+  };
+  const borrar = (id) => setDevoluciones((devoluciones || []).filter((d) => d.id !== id));
+
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+      {DEUDORES.filter((q) => deudas[q] > 0.5).map((quien) => {
+        const historial = (devoluciones || []).filter((d) => d.quien === quien);
+        return (
+          <div key={quien} style={{ background: C.card, borderRadius: 8, padding: "9px 12px" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" }}>
+              <div style={{ fontSize: 13 }}>
+                {quien === "Padres" ? "👪" : "👤"} <strong>{quien === "Padres" ? "Préstamo padres" : quien}</strong> — se le debe <strong style={{ color: C.amber }}>{fmt(deudas[quien])}</strong>
+              </div>
+              <Btn small onClick={() => abrir(quien)}>+ Registrar devolución</Btn>
+            </div>
+            {abiertoPara === quien && (
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginTop: 8 }}>
+                <Input placeholder="Cantidad €" type="number" value={draft.cantidad} onChange={(v) => setDraft({ ...draft, cantidad: v })} style={{ width: 110 }} />
+                <Input placeholder="Fecha" type="date" value={draft.fecha} onChange={(v) => setDraft({ ...draft, fecha: v })} style={{ width: 150 }} />
+                <Input placeholder="Comentario (opcional)" value={draft.comentario} onChange={(v) => setDraft({ ...draft, comentario: v })} style={{ flex: 1, minWidth: 140 }} />
+                <Btn small variant="primary" onClick={() => guardar(quien)}>Guardar</Btn>
+                <Btn small variant="ghost" onClick={() => setAbiertoPara(null)}>✕</Btn>
+              </div>
+            )}
+            {historial.length > 0 && (
+              <div style={{ marginTop: 8, fontSize: 11, color: C.sub }}>
+                {historial.map((d) => (
+                  <div key={d.id} style={{ display: "flex", alignItems: "center", gap: 6, padding: "2px 0" }}>
+                    <span>✅ {fmt(d.cantidad)}{d.fecha ? ` · ${d.fecha}` : ""}{d.comentario ? ` · ${d.comentario}` : ""}</span>
+                    <button onClick={() => borrar(d.id)} style={{ border: "none", background: "none", cursor: "pointer", color: C.red, fontSize: 11, padding: 0 }} title="Eliminar esta devolución">🗑</button>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -1543,7 +1630,7 @@ function PagosDePartida({ gasto, pagos, setPagos, guests, familias }) {
 // ─────────────────────────────────────────────────────────
 // TAB: GASTOS (editable) — incluye los pagos (desplegando cada partida) y los ingresos (p.ej. Regalos)
 // ─────────────────────────────────────────────────────────
-function TabGastos({ gastos, setGastos, pagos, setPagos, guests, familias }) {
+function TabGastos({ gastos, setGastos, pagos, setPagos, devoluciones, setDevoluciones, guests, familias }) {
   const [editing, setEditing] = useState(null); // id being edited
   const [draft, setDraft] = useState({});
   const [adding, setAdding] = useState(false);
@@ -1563,11 +1650,16 @@ function TabGastos({ gastos, setGastos, pagos, setPagos, guests, familias }) {
   const totalIngresos = ingresos.reduce((s, g) => s + paidOf(g), 0);
 
   // Pendientes de devolver: pagos hechos desde cuentas personales (Trade Republic Iván / Caixa Marga)
-  // en vez de la cuenta compartida BBVA Boda — antes se veía en la pestaña Registro, ahora aquí mismo.
+  // o con el préstamo de los padres, en vez de la cuenta compartida BBVA Boda — antes se veía en la
+  // pestaña Registro, ahora aquí mismo. Se descuenta lo que ya se haya ido devolviendo (registro aparte
+  // "devoluciones", para poder ir saldando la deuda poco a poco sin tocar el registro de pagos).
   const pendientes = pagos.filter((p) => cuentaPersona(p.cuenta));
-  const debeIvan = pendientes.filter((p) => cuentaPersona(p.cuenta) === "Iván").reduce((s, p) => s + (+p.cantidad || 0), 0);
-  const debeMarga = pendientes.filter((p) => cuentaPersona(p.cuenta) === "Marga").reduce((s, p) => s + (+p.cantidad || 0), 0);
-  const totalPend = debeIvan + debeMarga;
+  const debeBruto = (quien) => pendientes.filter((p) => cuentaPersona(p.cuenta) === quien).reduce((s, p) => s + (+p.cantidad || 0), 0);
+  const devueltoA = (quien) => (devoluciones || []).filter((d) => d.quien === quien).reduce((s, d) => s + (+d.cantidad || 0), 0);
+  const debeIvan = Math.max(0, debeBruto("Iván") - devueltoA("Iván"));
+  const debeMarga = Math.max(0, debeBruto("Marga") - devueltoA("Marga"));
+  const debePadres = Math.max(0, debeBruto("Padres") - devueltoA("Padres"));
+  const totalPend = debeIvan + debeMarga + debePadres;
   const totalPlanificado = pagos.filter((p) => (p.situacion || "Realizado") === "Planificado").reduce((s, p) => s + (+p.cantidad || 0), 0);
 
   const toggleExpand = (id) => setExpanded((e) => ({ ...e, [id]: !e[id] }));
@@ -1673,9 +1765,14 @@ function TabGastos({ gastos, setGastos, pagos, setPagos, guests, familias }) {
 
       {totalPend > 0 && (
         <Card style={{ marginBottom: 14, background: C.amberLight, border: `1px solid ${C.amber}33` }}>
-          <div style={{ fontSize: 13, color: C.amber }}>
-            <strong>💡 Pendiente de devolver:</strong> {fmt(totalPend)} pagados desde cuentas personales que la hucha boda debe reembolsar — {fmt(debeIvan)} a Iván y {fmt(debeMarga)} a Marga. Los pagos desde <em>BBVA Boda</em> ya salieron de la hucha común.
+          <div style={{ fontSize: 13, color: C.amber, marginBottom: 10 }}>
+            <strong>💡 Pendiente de devolver:</strong> {fmt(totalPend)} pagados desde cuentas personales o con préstamos que la hucha boda debe reembolsar. Los pagos desde <em>BBVA Boda</em> ya salieron de la hucha común.
           </div>
+          <DevolucionesPanel
+            deudas={{ Iván: debeIvan, Marga: debeMarga, Padres: debePadres }}
+            devoluciones={devoluciones}
+            setDevoluciones={setDevoluciones}
+          />
         </Card>
       )}
 
@@ -2381,6 +2478,17 @@ function TabMesas({ guests, setGuests, tablesConfig, setTablesConfig, deleteMesa
   const toggleConfirmada = (mesa) => {
     setTablesConfig(tablesConfig.map((t) => (t.mesa === mesa ? { ...t, confirmada: !t.confirmada } : t)));
   };
+  // Coloca de golpe las mesas 1-11 en la disposición de cuadrícula (nupcial arriba centrada, filas de
+  // 4/3/3 debajo). Se aplica incluso a mesas ya "confirmadas" (es una acción a propósito, no un arrastre
+  // accidental) — las que no estén en el mapa (si hubiera alguna mesa extra) se quedan donde estaban.
+  const mesasFueraDeCuadricula = mesas.filter((t) => !CUADRICULA_MESAS[t.mesa]);
+  const organizarEnCuadricula = () => {
+    const aviso = mesasFueraDeCuadricula.length > 0
+      ? ` (${mesasFueraDeCuadricula.map((t) => t.nombre).join(", ")} no está${mesasFueraDeCuadricula.length > 1 ? "n" : ""} en la cuadrícula y no se tocará${mesasFueraDeCuadricula.length > 1 ? "n" : ""})`
+      : "";
+    if (!confirm(`¿Organizar las mesas 1-11 en cuadrícula (nupcial arriba, filas de 4-3-3 debajo)?${aviso}`)) return;
+    setTablesConfig(tablesConfig.map((t) => (CUADRICULA_MESAS[t.mesa] ? { ...t, ...CUADRICULA_MESAS[t.mesa] } : t)));
+  };
 
   const chipStyle = (g, small) => {
     const declined = g.confirmado === "No" || g.comida === "No";
@@ -2425,6 +2533,7 @@ function TabMesas({ guests, setGuests, tablesConfig, setTablesConfig, deleteMesa
         {sinMesa.length > 0 && <Badge color="purple">{sinMesa.length} sin asignar</Badge>}
         {mesasConfirmadas > 0 && <Badge color="green">{mesasConfirmadas}/{mesas.length} mesas confirmadas</Badge>}
         <div style={{ flex: 1 }} />
+        <Btn small onClick={organizarEnCuadricula} title="Coloca las mesas 1-11 en filas fijas: nupcial arriba centrada, luego 4-3-3">🔲 Organizar en cuadrícula</Btn>
         <Btn small variant="primary" onClick={() => setAddingTable(!addingTable)}>{addingTable ? "Cancelar" : "+ Nueva mesa"}</Btn>
       </div>
 
@@ -2964,6 +3073,7 @@ function BodaApp() {
   const [gastos, setGastosRaw] = useState(GASTOS_INIT);
   const [guests, setGuestsRaw] = useState(GUESTS_INIT);
   const [pagos, setPagosRaw] = useState(PAGOS_INIT);
+  const [devoluciones, setDevolucionesRaw] = useState(DEVOLUCIONES_INIT);
   const [tablesConfig, setTablesConfigRaw] = useState(MESAS_CONFIG_INIT);
   const [mesasEliminadas, setMesasEliminadasRaw] = useState([]); // nº de mesas que borraste tú a mano, para no revivirlas
   const [elementos, setElementosRaw] = useState(ELEMENTOS_INIT);
@@ -3042,6 +3152,7 @@ function BodaApp() {
           setGastosRaw(mergedGastos);
         }
         if (mergedPagos !== st.pagos) setPagosRaw(mergedPagos);
+        if (st.devoluciones) setDevolucionesRaw(st.devoluciones);
         const mesasEliminadasGuardadas = st.mesasEliminadas || [];
         setMesasEliminadasRaw(mesasEliminadasGuardadas);
         let mergedTablesConfig = st.tablesConfig;
@@ -3090,6 +3201,7 @@ function BodaApp() {
             gastos: mergedGastos || st.gastos || gastos,
             guests: mergedGuests || st.guests || guests,
             pagos: mergedPagos,
+            devoluciones: st.devoluciones || devoluciones,
             movimientos: undefined,
             elementos: mergedElementos || st.elementos || elementos,
             familias: mergedFamilias || st.familias || familias,
@@ -3113,11 +3225,12 @@ function BodaApp() {
     if (ok) setTimeout(() => setSaveStatus("idle"), 1800);
   }, []);
 
-  const snapshot = (over = {}) => ({ gastos, guests, pagos, tablesConfig, mesasEliminadas, elementos, familias, bebidas, canciones, revisar, ...over });
+  const snapshot = (over = {}) => ({ gastos, guests, pagos, devoluciones, tablesConfig, mesasEliminadas, elementos, familias, bebidas, canciones, revisar, ...over });
 
   const setGastos = (g) => { setGastosRaw(g); persist(snapshot({ gastos: g })); };
   const setGuests = (gu) => { setGuestsRaw(gu); persist(snapshot({ guests: gu })); };
   const setPagos = (p) => { setPagosRaw(p); persist(snapshot({ pagos: p })); };
+  const setDevoluciones = (d) => { setDevolucionesRaw(d); persist(snapshot({ devoluciones: d })); };
   const setTablesConfig = (tc) => { setTablesConfigRaw(tc); persist(snapshot({ tablesConfig: tc })); };
   // Borra una mesa Y recuerda para siempre que la borraste (en el mismo guardado, para no perder el
   // dato si el navegador recarga justo entre medias). Así no vuelve a aparecer en el próximo reload.
@@ -3139,6 +3252,7 @@ function BodaApp() {
     setGastosRaw(GASTOS_INIT);
     setGuestsRaw(GUESTS_INIT);
     setPagosRaw(PAGOS_INIT);
+    setDevolucionesRaw(DEVOLUCIONES_INIT);
     setTablesConfigRaw(MESAS_CONFIG_INIT);
     setMesasEliminadasRaw([]);
     setElementosRaw(ELEMENTOS_INIT);
@@ -3146,7 +3260,7 @@ function BodaApp() {
     setBebidasRaw(BEBIDAS_INIT);
     setCancionesRaw(CANCIONES_INIT);
     setRevisarRaw(REVISAR_INIT);
-    persist({ gastos: GASTOS_INIT, guests: GUESTS_INIT, pagos: PAGOS_INIT, tablesConfig: MESAS_CONFIG_INIT, mesasEliminadas: [], elementos: ELEMENTOS_INIT, familias: FAMILIAS_INIT, bebidas: BEBIDAS_INIT, canciones: CANCIONES_INIT, revisar: REVISAR_INIT });
+    persist({ gastos: GASTOS_INIT, guests: GUESTS_INIT, pagos: PAGOS_INIT, devoluciones: DEVOLUCIONES_INIT, tablesConfig: MESAS_CONFIG_INIT, mesasEliminadas: [], elementos: ELEMENTOS_INIT, familias: FAMILIAS_INIT, bebidas: BEBIDAS_INIT, canciones: CANCIONES_INIT, revisar: REVISAR_INIT });
   };
 
   // Recarga los datos guardados (útil si tu pareja ha hecho cambios desde su móvil)
@@ -3172,6 +3286,7 @@ function BodaApp() {
       if (st.gastos || fusionMago.cambiado) setGastosRaw(nuevosGastos);
       if (st.guests) setGuestsRaw(mergeGuestsWithLatest(st.guests));
       if (st.pagos || st.movimientos || fusionMago.cambiado) setPagosRaw(nuevosPagos);
+      if (st.devoluciones) setDevolucionesRaw(st.devoluciones);
       const mesasEliminadasActuales = st.mesasEliminadas || mesasEliminadas;
       if (st.mesasEliminadas) setMesasEliminadasRaw(st.mesasEliminadas);
       if (st.tablesConfig) setTablesConfigRaw(mergeTablesConfigWithLatest(st.tablesConfig, mesasEliminadasActuales));
@@ -3200,6 +3315,11 @@ function BodaApp() {
       Partida: (gastos.find((g) => g.id === p.partida) || {}).c || "", Situación: p.situacion || "Realizado", Comentario: p.comentario || "",
     })));
     XLSX.utils.book_append_sheet(wb, wsPagos, "Pagos");
+
+    const wsDev = XLSX.utils.json_to_sheet((devoluciones || []).map((d) => ({
+      "A quién": d.quien, Cantidad: d.cantidad, Fecha: d.fecha || "", Comentario: d.comentario || "",
+    })));
+    XLSX.utils.book_append_sheet(wb, wsDev, "Devoluciones");
 
     const wsInv = XLSX.utils.json_to_sheet(guests.map((g) => ({
       Nombre: g.n, Sexo: g.sex, Familia: familiaLabel(familias, g.familia) || "", Despedida: g.desp, Menú: g.comida, Mesa: g.mesa ?? "",
@@ -3295,8 +3415,8 @@ function BodaApp() {
             Cambios guardados automáticamente · Boda octubre 2026
           </p>
         </div>
-        {tab === "finanzas" && <TabFinanzas gastos={gastos} guests={guests} pagos={pagos} />}
-        {tab === "gastos" && <TabGastos gastos={gastos} setGastos={setGastos} pagos={pagos} setPagos={setPagos} guests={guests} familias={familias} />}
+        {tab === "finanzas" && <TabFinanzas gastos={gastos} guests={guests} pagos={pagos} devoluciones={devoluciones} />}
+        {tab === "gastos" && <TabGastos gastos={gastos} setGastos={setGastos} pagos={pagos} setPagos={setPagos} devoluciones={devoluciones} setDevoluciones={setDevoluciones} guests={guests} familias={familias} />}
         {tab === "invitados" && <TabInvitados guests={guests} setGuests={setGuests} familias={familias} setFamilias={setFamilias} pagos={pagos} gastos={gastos} />}
         {tab === "mesas" && <TabMesas guests={guests} setGuests={setGuests} tablesConfig={tablesConfig} setTablesConfig={setTablesConfig} deleteMesa={deleteMesa} elementos={elementos} setElementos={setElementos} familias={familias} />}
         {tab === "cuestionario" && <TabCuestionario bebidas={bebidas} setBebidas={setBebidas} canciones={canciones} setCanciones={setCanciones} revisar={revisar} setRevisar={setRevisar} />}

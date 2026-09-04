@@ -2453,6 +2453,26 @@ function TabMesas({ guests, setGuests, tablesConfig, setTablesConfig, deleteMesa
   // Tarjeta de una mesa — dónde se ve y edita quién se sienta en ella (arrastra chapas de invitados
   // aquí dentro, o suéltalas para quitarlas). Es una función normal (no un componente aparte) porque
   // usa un montón de estado y handlers ya definidos arriba en TabMesas.
+  // Agrupa las tarjetas en filas según su orden (el mismo que controlas arrastrando el tirador ⠿): la
+  // primera va sola en su propia fila (pensada para la nupcial, pero es "la que pongas primera"), y el
+  // resto se reparte en filas de 4, luego 3, luego 3 — si hay más mesas de las que caben en esas filas,
+  // las que sobren se agrupan repitiendo el último tamaño (3). Así consigues el "tablero" 1-4-3-3 que
+  // querías, y sigue siendo 100% reordenable: arrastra cualquier tarjeta a otra posición para cambiar
+  // en qué fila y en qué sitio cae.
+  const TAMANOS_FILAS = [4, 3, 3];
+  const filasMesas = useMemo(() => {
+    const resto = mesas.slice(1);
+    const filas = [];
+    let i = 0, fi = 0;
+    while (i < resto.length) {
+      const tam = TAMANOS_FILAS[Math.min(fi, TAMANOS_FILAS.length - 1)];
+      filas.push(resto.slice(i, i + tam));
+      i += tam;
+      fi++;
+    }
+    return filas;
+  }, [mesas]);
+
   const renderMesaCard = (t) => {
     const gs = byMesa[t.mesa] || [];
     const cap = Math.max(1, +t.capacidad || 1);
@@ -2628,10 +2648,21 @@ function TabMesas({ guests, setGuests, tablesConfig, setTablesConfig, deleteMesa
       </div>
 
       {/* ── Mesas: de un vistazo, quién hay en cada una — arrastra las chapas entre tarjetas para
-          moverlos de mesa. Arrastra el tirador ⠿ de una tarjeta para colocarla donde quieras: el
-          orden se guarda y se respeta en la próxima visita, como si fuesen casillas de un tablero ── */}
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill, minmax(230px, 1fr))", gap: 12, marginBottom: 16 }}>
-        {mesas.map(renderMesaCard)}
+          moverlos de mesa. Arrastra el tirador ⠿ de una tarjeta para colocarla donde quieras: el orden
+          se guarda y se respeta en la próxima visita. La primera queda sola y centrada en su propia
+          fila (por defecto la nupcial, pero puede ser la que arrastres a esa posición), y el resto se
+          reparte debajo en filas de 4-3-3 ── */}
+      <div style={{ display: "flex", flexDirection: "column", gap: 12, marginBottom: 16 }}>
+        {mesas[0] && (
+          <div style={{ display: "flex", justifyContent: "center" }}>
+            <div style={{ width: "100%", maxWidth: 260 }}>{renderMesaCard(mesas[0])}</div>
+          </div>
+        )}
+        {filasMesas.map((fila, i) => (
+          <div key={i} style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(190px, 1fr))", gap: 12 }}>
+            {fila.map(renderMesaCard)}
+          </div>
+        ))}
       </div>
     </div>
   );

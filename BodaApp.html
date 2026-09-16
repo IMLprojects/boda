@@ -885,13 +885,33 @@ function limpiarAjusteFantasma(savedPagos) {
   return savedPagos.filter((p) => !(p.concepto && p.concepto.startsWith("Ajuste de conciliación con saldo bancario real")));
 }
 
+// Limpieza defensiva: el bug de mergePagosWithLatest (arreglado arriba) podía duplicar un pago cada vez
+// que lo editabas — el editado se quedaba en su sitio y una copia SIN editar del original (con el mismo
+// id) se añadía al final. Esta función quita esas copias sobrantes: si dos pagos comparten id, se queda
+// con la PRIMERA (la editada, en su posición original) y descarta las que vengan detrás con ese mismo id.
+function limpiarPagosDuplicadosPorId(savedPagos) {
+  const vistos = new Set();
+  const limpios = [];
+  savedPagos.forEach((p) => {
+    if (p.id && vistos.has(p.id)) return; // duplicado del bug: se descarta
+    if (p.id) vistos.add(p.id);
+    limpios.push(p);
+  });
+  return limpios;
+}
+
 // Migración: añade al registro de pagos guardado cualquier pago nuevo de PAGOS_INIT que todavía no
 // tengas (por ejemplo, el 50% del catering pagado el 11/08/2026 con el regalo en efectivo de la familia
 // de Marga + el resto de la hucha), sin duplicar nada que ya tuvieras ni tocar pagos añadidos a mano.
+// Añade a tu guardado los pagos nuevos que traiga PAGOS_INIT (p.ej. uno añadido en una actualización de
+// la app) que tú todavía no tengas — SOLO se compara por "id" (no por concepto/cantidad/partida): si
+// comparásemos por contenido, en cuanto editaras un pago (cambiando su importe o concepto) dejaría de
+// coincidir con el original y esta función lo daría por "nuevo", duplicándolo en cada carga. Comparar
+// por id evita justo ese bug, y sigue detectando bien los pagos realmente nuevos (que nunca tuvieron
+// ese id guardado).
 function mergePagosWithLatest(savedPagos) {
-  const clave = (p) => `${p.concepto}|${p.cantidad}|${p.partida}`;
-  const savedKeys = new Set(savedPagos.map(clave));
-  const nuevos = PAGOS_INIT.filter((p) => !savedKeys.has(clave(p)));
+  const savedIds = new Set(savedPagos.map((p) => p.id));
+  const nuevos = PAGOS_INIT.filter((p) => !savedIds.has(p.id));
   return nuevos.length ? [...savedPagos, ...nuevos] : savedPagos;
 }
 
@@ -2994,6 +3014,8 @@ function BodaApp() {
         // antiguo "Ajuste de conciliación" como si fuera un ingreso real de 895€: se quita, ya no hace
         // falta ningún ajuste a mano.
         mergedPagos = limpiarAjusteFantasma(mergedPagos);
+        // Quita duplicados que ya se hayan colado por el bug de arriba (editar un pago lo duplicaba).
+        mergedPagos = limpiarPagosDuplicadosPorId(mergedPagos);
         // Migración única: si tu navegador guardó una sesión de antes de fusionar "Pagos" y
         // "Movimientos de huchas" en un solo registro, convierte lo que quedaba en movimientos (dinero
         // de la hucha Boda que no fuera ya un duplicado) en pagos enlazados a una partida, y descarta
@@ -3133,7 +3155,7 @@ function BodaApp() {
     const st = await loadState();
     if (st) {
       let nuevosGastos = st.gastos ? mergeGastosWithLatest(st.gastos) : gastos;
-      let nuevosPagos = limpiarAjusteFantasma(st.pagos ? mergePagosWithLatest(st.pagos) : pagos);
+      let nuevosPagos = limpiarPagosDuplicadosPorId(limpiarAjusteFantasma(st.pagos ? mergePagosWithLatest(st.pagos) : pagos));
       if (st.movimientos && st.movimientos.length) {
         const migrados = migrarMovimientosAPagos(st.movimientos, nuevosGastos);
         if (migrados.length) {

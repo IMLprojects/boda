@@ -348,6 +348,11 @@ const DEUDORES = ["Iván", "Marga", "Padres"];
 // Registro de devoluciones (pagos parciales para saldar lo que se debe a Iván, Marga o a los padres).
 // Vive aparte de "pagos" porque no es un gasto de la boda, es un movimiento interno entre cuentas.
 const DEVOLUCIONES_INIT = [];
+// Estimación editable de lo que aún podéis recibir en regalos de invitados que no os han dado nada
+// todavía: nº de invitados que os quedan por "cobrar" × cantidad media que esperáis de cada uno. Es
+// solo una previsión (no mueve ningún pago real) para poder verla en la pestaña Gastos, sección
+// Ingresos, y saber cuánto os falta por recibir en total.
+const ESTIMACION_REGALOS_INIT = { invitadosRestantes: 0, cantidadPorInvitado: 0 };
 
 // Registro 1 — Pagos a proveedores (cada uno enlazado a su partida del presupuesto)
 const PAGOS_INIT = [
@@ -1273,8 +1278,6 @@ function LineChartSVG({ series, height = 230, hoyMes, detalleMes }) {
 }
 
 function TabFinanzas({ gastos, guests, pagos, devoluciones }) {
-  const [luna, setLuna] = useState(9848); // coste final ya confirmado de la luna de miel
-
   const paidMap = pagadoPorPartida(pagos);
   // Lo que ya se debe a los padres de Iván (préstamo del 11/08/2026 para el catering) menos lo que ya
   // se les haya ido devolviendo — mismo cálculo que en la pestaña Gastos, aquí solo para el aviso.
@@ -1318,14 +1321,6 @@ function TabFinanzas({ gastos, guests, pagos, devoluciones }) {
   const nAdultos = asisten.filter((g) => g.comida !== "Niño").length;
   const nConfirmados = guests.filter((g) => g.confirmado === "Si").length;
   const regalosMin = nAdultos * 180;
-
-  const ahorroLuna = 9848 - luna;
-  const prestamoAjustado = Math.max(0, gap - ahorroLuna);
-  // Lo que hay que devolver en total con los sobres de la boda: lo ya prestado por los padres
-  // (debePadres) más el préstamo adicional (si hiciera falta cubrir el resto del presupuesto).
-  const prestamoTotal = debePadres + prestamoAjustado;
-  const scBase = regalosMin - prestamoTotal;
-  const scCons = regalosMin - (debePadres + gap);
 
   const pct = (x) => ((x / totalPres) * 100).toFixed(1);
 
@@ -1379,53 +1374,6 @@ function TabFinanzas({ gastos, guests, pagos, devoluciones }) {
         </div>
         <div style={{ marginTop: 10, padding: "9px 13px", background: C.grayLight, borderRadius: 8, fontSize: 12, color: C.sub }}>
           Esta curva se recalcula sola con cada pago que registréis (gastos y también ingresos, como los regalos recibidos). La aportación mensual a la hucha boda es de {fmt(1750)} (Iván ~{fmt(1050)} + Marga ~{fmt(700)}). Pasa el ratón (o toca, en el móvil) por cualquier punto para ver el detalle de ese mes: la aportación, cada gasto o ingreso, y el saldo resultante.
-        </div>
-      </Card>
-
-      <Card title="🤝 Simulación del préstamo familiar" style={{ marginBottom: 14 }}>
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(280px,1fr))", gap: 20 }}>
-          <div>
-            <div style={{ fontSize: 12, color: C.sub, marginBottom: 12 }}>Flujo de caja previsto</div>
-            {[
-              { icon: "✅", date: "11 agosto — ya hecho", title: "Catering 50% señal (préstamo padres)", amt: `–${fmt(7919.73)}`, color: C.amber },
-              { icon: "🤝", date: "Si hace falta", title: "Préstamo adicional (más allá del de los padres)", amt: `+${fmt(prestamoAjustado)}`, color: C.purple },
-              { icon: "✈️", date: "Antes de julio", title: `Cerrar luna de miel (${fmt(luna)})`, amt: `–${fmt(luna - 2000)} restante`, color: C.purple },
-              { icon: "🎊", date: "Octubre — boda", title: "Resto pagos + sobres", amt: `+${fmt(regalosMin)} regalos`, color: C.teal },
-              { icon: "✅", date: "Tras la boda", title: "Devolver préstamo(s)", amt: `–${fmt(prestamoTotal)} · sobran ${fmt(scBase)}`, color: C.green },
-            ].map((s, i) => (
-              <div key={i} style={{ display: "flex", gap: 12, paddingBottom: i < 4 ? 14 : 0, alignItems: "flex-start" }}>
-                <div style={{ width: 32, height: 32, borderRadius: "50%", background: C.grayLight, display: "flex", alignItems: "center", justifyContent: "center", fontSize: 14, flexShrink: 0 }}>{s.icon}</div>
-                <div>
-                  <div style={{ fontSize: 10, color: C.sub, fontWeight: 600, textTransform: "uppercase", letterSpacing: ".5px" }}>{s.date}</div>
-                  <div style={{ fontSize: 13, fontWeight: 600 }}>{s.title}</div>
-                  <div style={{ fontSize: 13, fontWeight: 700, color: s.color }}>{s.amt}</div>
-                </div>
-              </div>
-            ))}
-          </div>
-          <div>
-            <div style={{ fontSize: 12, color: C.sub, marginBottom: 8 }}>Coste de la luna de miel</div>
-            <div style={{ display: "flex", alignItems: "center", gap: 12, marginBottom: 4 }}>
-              <input type="range" min={9848} max={9848} step={1} value={luna} disabled onChange={(e) => setLuna(+e.target.value)} style={{ flex: 1, accentColor: C.purple, opacity: 0.5 }} />
-              <span style={{ fontSize: 15, fontWeight: 700, color: C.purple, minWidth: 62, textAlign: "right" }}>{fmt(luna)}</span>
-            </div>
-            <div style={{ fontSize: 11, color: C.sub, marginBottom: 16 }}>Ya pagados {fmt(2000)} de señal · Coste final confirmado {fmt(9848)}</div>
-            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-              <div style={{ background: C.tealLight, borderRadius: 10, padding: "13px 15px" }}>
-                <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", color: C.teal, marginBottom: 4 }}>Superávit (con préstamo devuelto)</div>
-                <div style={{ fontSize: 21, fontWeight: 700, color: C.teal }}>{fmt(scBase)}</div>
-                <div style={{ fontSize: 11, color: C.sub }}>{nAdultos} adultos × {fmt(180)} – préstamo</div>
-              </div>
-              <div style={{ background: C.amberLight, borderRadius: 10, padding: "13px 15px" }}>
-                <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", color: C.amber, marginBottom: 4 }}>Conservador (sin descontar préstamo)</div>
-                <div style={{ fontSize: 21, fontWeight: 700, color: C.amber }}>{fmt(scCons)}</div>
-                <div style={{ fontSize: 11, color: C.sub }}>Ya no hay margen de ahorro: el coste está confirmado</div>
-              </div>
-            </div>
-            <div style={{ marginTop: 12, padding: "10px 14px", background: C.grayLight, borderRadius: 8, fontSize: 12, color: C.sub }}>
-              <strong style={{ color: C.text }}>Todos los escenarios devuelven íntegros tanto el préstamo de los padres ({fmt(debePadres)}) como el adicional, si hiciera falta.</strong> Los KPIs se recalculan automáticamente al editar gastos, pagos o invitados.
-            </div>
-          </div>
         </div>
       </Card>
 
@@ -1653,7 +1601,7 @@ function PagosDePartida({ gasto, pagos, setPagos, guests, familias }) {
 // ─────────────────────────────────────────────────────────
 // TAB: GASTOS (editable) — incluye los pagos (desplegando cada partida) y los ingresos (p.ej. Regalos)
 // ─────────────────────────────────────────────────────────
-function TabGastos({ gastos, setGastos, pagos, setPagos, devoluciones, setDevoluciones, guests, familias }) {
+function TabGastos({ gastos, setGastos, pagos, setPagos, devoluciones, setDevoluciones, guests, familias, estimacionRegalos, setEstimacionRegalos }) {
   const [editing, setEditing] = useState(null); // id being edited
   const [draft, setDraft] = useState({});
   const [adding, setAdding] = useState(false);
@@ -1862,6 +1810,36 @@ function TabGastos({ gastos, setGastos, pagos, setPagos, devoluciones, setDevolu
           </div>
         </Card>
       )}
+
+      <Card title="🎁 Estimación de regalos pendientes de invitados" style={{ marginTop: ingresos.length ? 16 : 0 }}>
+        <div style={{ fontSize: 12, color: C.sub, marginBottom: 12 }}>
+          Cálculo aparte de lo ya recibido arriba: cuánto esperáis recibir todavía de los invitados que aún no os han dado su regalo. Ajusta los dos números según vayáis teniendo más claro quién falta y cuánto suele dar cada uno.
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 14, alignItems: "end" }}>
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 600, color: C.sub, marginBottom: 6, textTransform: "uppercase", letterSpacing: ".5px" }}>Invitados restantes por regalo</div>
+            <Input
+              type="number"
+              value={estimacionRegalos.invitadosRestantes}
+              onChange={(v) => setEstimacionRegalos({ ...estimacionRegalos, invitadosRestantes: v === "" ? "" : +v })}
+              style={{ width: "100%" }}
+            />
+          </div>
+          <div>
+            <div style={{ fontSize: 11, fontWeight: 600, color: C.sub, marginBottom: 6, textTransform: "uppercase", letterSpacing: ".5px" }}>Regalo estimado por invitado (€)</div>
+            <Input
+              type="number"
+              value={estimacionRegalos.cantidadPorInvitado}
+              onChange={(v) => setEstimacionRegalos({ ...estimacionRegalos, cantidadPorInvitado: v === "" ? "" : +v })}
+              style={{ width: "100%" }}
+            />
+          </div>
+          <div style={{ background: C.tealLight, borderRadius: 10, padding: "13px 15px" }}>
+            <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", color: C.teal, marginBottom: 4 }}>Total estimado a recibir</div>
+            <div style={{ fontSize: 21, fontWeight: 700, color: C.teal }}>{fmt((+estimacionRegalos.invitadosRestantes || 0) * (+estimacionRegalos.cantidadPorInvitado || 0))}</div>
+          </div>
+        </div>
+      </Card>
     </div>
   );
 }
@@ -2959,6 +2937,7 @@ function BodaApp() {
   const [guests, setGuestsRaw] = useState(GUESTS_INIT);
   const [pagos, setPagosRaw] = useState(PAGOS_INIT);
   const [devoluciones, setDevolucionesRaw] = useState(DEVOLUCIONES_INIT);
+  const [estimacionRegalos, setEstimacionRegalosRaw] = useState(ESTIMACION_REGALOS_INIT);
   const [tablesConfig, setTablesConfigRaw] = useState(MESAS_CONFIG_INIT);
   const [mesasEliminadas, setMesasEliminadasRaw] = useState([]); // nº de mesas que borraste tú a mano, para no revivirlas
   const [elementos, setElementosRaw] = useState(ELEMENTOS_INIT);
@@ -3040,6 +3019,7 @@ function BodaApp() {
         }
         if (mergedPagos !== st.pagos) setPagosRaw(mergedPagos);
         if (st.devoluciones) setDevolucionesRaw(st.devoluciones);
+        if (st.estimacionRegalos) setEstimacionRegalosRaw({ ...ESTIMACION_REGALOS_INIT, ...st.estimacionRegalos });
         const mesasEliminadasGuardadas = st.mesasEliminadas || [];
         setMesasEliminadasRaw(mesasEliminadasGuardadas);
         let mergedTablesConfig = st.tablesConfig;
@@ -3089,6 +3069,7 @@ function BodaApp() {
             guests: mergedGuests || st.guests || guests,
             pagos: mergedPagos,
             devoluciones: st.devoluciones || devoluciones,
+            estimacionRegalos: st.estimacionRegalos || estimacionRegalos,
             movimientos: undefined,
             elementos: mergedElementos || st.elementos || elementos,
             familias: mergedFamilias || st.familias || familias,
@@ -3112,12 +3093,13 @@ function BodaApp() {
     if (ok) setTimeout(() => setSaveStatus("idle"), 1800);
   }, []);
 
-  const snapshot = (over = {}) => ({ gastos, guests, pagos, devoluciones, tablesConfig, mesasEliminadas, elementos, familias, bebidas, canciones, revisar, ...over });
+  const snapshot = (over = {}) => ({ gastos, guests, pagos, devoluciones, estimacionRegalos, tablesConfig, mesasEliminadas, elementos, familias, bebidas, canciones, revisar, ...over });
 
   const setGastos = (g) => { setGastosRaw(g); persist(snapshot({ gastos: g })); };
   const setGuests = (gu) => { setGuestsRaw(gu); persist(snapshot({ guests: gu })); };
   const setPagos = (p) => { setPagosRaw(p); persist(snapshot({ pagos: p })); };
   const setDevoluciones = (d) => { setDevolucionesRaw(d); persist(snapshot({ devoluciones: d })); };
+  const setEstimacionRegalos = (e) => { setEstimacionRegalosRaw(e); persist(snapshot({ estimacionRegalos: e })); };
   const setTablesConfig = (tc) => { setTablesConfigRaw(tc); persist(snapshot({ tablesConfig: tc })); };
   // Borra una mesa Y recuerda para siempre que la borraste (en el mismo guardado, para no perder el
   // dato si el navegador recarga justo entre medias). Así no vuelve a aparecer en el próximo reload.
@@ -3140,6 +3122,7 @@ function BodaApp() {
     setGuestsRaw(GUESTS_INIT);
     setPagosRaw(PAGOS_INIT);
     setDevolucionesRaw(DEVOLUCIONES_INIT);
+    setEstimacionRegalosRaw(ESTIMACION_REGALOS_INIT);
     setTablesConfigRaw(MESAS_CONFIG_INIT);
     setMesasEliminadasRaw([]);
     setElementosRaw(ELEMENTOS_INIT);
@@ -3147,7 +3130,7 @@ function BodaApp() {
     setBebidasRaw(BEBIDAS_INIT);
     setCancionesRaw(CANCIONES_INIT);
     setRevisarRaw(REVISAR_INIT);
-    persist({ gastos: GASTOS_INIT, guests: GUESTS_INIT, pagos: PAGOS_INIT, devoluciones: DEVOLUCIONES_INIT, tablesConfig: MESAS_CONFIG_INIT, mesasEliminadas: [], elementos: ELEMENTOS_INIT, familias: FAMILIAS_INIT, bebidas: BEBIDAS_INIT, canciones: CANCIONES_INIT, revisar: REVISAR_INIT });
+    persist({ gastos: GASTOS_INIT, guests: GUESTS_INIT, pagos: PAGOS_INIT, devoluciones: DEVOLUCIONES_INIT, estimacionRegalos: ESTIMACION_REGALOS_INIT, tablesConfig: MESAS_CONFIG_INIT, mesasEliminadas: [], elementos: ELEMENTOS_INIT, familias: FAMILIAS_INIT, bebidas: BEBIDAS_INIT, canciones: CANCIONES_INIT, revisar: REVISAR_INIT });
   };
 
   // Recarga los datos guardados (útil si tu pareja ha hecho cambios desde su móvil)
@@ -3174,6 +3157,7 @@ function BodaApp() {
       if (st.guests) setGuestsRaw(mergeGuestsWithLatest(st.guests));
       if (st.pagos || st.movimientos || fusionMago.cambiado) setPagosRaw(nuevosPagos);
       if (st.devoluciones) setDevolucionesRaw(st.devoluciones);
+      if (st.estimacionRegalos) setEstimacionRegalosRaw({ ...ESTIMACION_REGALOS_INIT, ...st.estimacionRegalos });
       const mesasEliminadasActuales = st.mesasEliminadas || mesasEliminadas;
       if (st.mesasEliminadas) setMesasEliminadasRaw(st.mesasEliminadas);
       if (st.tablesConfig) setTablesConfigRaw(mergeTablesConfigWithLatest(st.tablesConfig, mesasEliminadasActuales));
@@ -3303,7 +3287,7 @@ function BodaApp() {
           </p>
         </div>
         {tab === "finanzas" && <TabFinanzas gastos={gastos} guests={guests} pagos={pagos} devoluciones={devoluciones} />}
-        {tab === "gastos" && <TabGastos gastos={gastos} setGastos={setGastos} pagos={pagos} setPagos={setPagos} devoluciones={devoluciones} setDevoluciones={setDevoluciones} guests={guests} familias={familias} />}
+        {tab === "gastos" && <TabGastos gastos={gastos} setGastos={setGastos} pagos={pagos} setPagos={setPagos} devoluciones={devoluciones} setDevoluciones={setDevoluciones} guests={guests} familias={familias} estimacionRegalos={estimacionRegalos} setEstimacionRegalos={setEstimacionRegalos} />}
         {tab === "invitados" && <TabInvitados guests={guests} setGuests={setGuests} familias={familias} setFamilias={setFamilias} pagos={pagos} gastos={gastos} />}
         {tab === "mesas" && <TabMesas guests={guests} setGuests={setGuests} tablesConfig={tablesConfig} setTablesConfig={setTablesConfig} deleteMesa={deleteMesa} elementos={elementos} setElementos={setElementos} familias={familias} />}
         {tab === "cuestionario" && <TabCuestionario bebidas={bebidas} setBebidas={setBebidas} canciones={canciones} setCanciones={setCanciones} revisar={revisar} setRevisar={setRevisar} />}

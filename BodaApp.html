@@ -1056,16 +1056,20 @@ function limpiarPagosDuplicadosPorId(savedPagos) {
 // coincidir con el original y esta función lo daría por "nuevo", duplicándolo en cada carga. Comparar
 // por id evita justo ese bug, y sigue detectando bien los pagos realmente nuevos (que nunca tuvieron
 // ese id guardado).
-function mergePagosWithLatest(savedPagos) {
+// ...y nunca reañade un pago que hayas borrado tú a propósito: sin esa lista de borrados, esta misma
+// función veía que el pago "faltaba" en tu guardado y te lo devolvía en la siguiente carga, así que el
+// borrado parecía funcionar pero se deshacía solo al recargar.
+function mergePagosWithLatest(savedPagos, pagosEliminados = []) {
   const savedIds = new Set(savedPagos.map((p) => p.id));
-  const nuevos = PAGOS_INIT.filter((p) => !savedIds.has(p.id));
+  const eliminados = new Set(pagosEliminados);
+  const nuevos = PAGOS_INIT.filter((p) => !savedIds.has(p.id) && !eliminados.has(p.id));
   return nuevos.length ? [...savedPagos, ...nuevos] : savedPagos;
 }
 
 // Migración: (1) actualiza partidas concretas cuyo importe estimado ya se ha corregido por uno real
 // (solo si sigues en el valor antiguo — si ya lo cambiaste tú a mano, no lo toca), y (2) añade partidas
 // nuevas de GASTOS_INIT que no existían todavía (p.ej. "Mago", un gasto real que faltaba en el presupuesto).
-function mergeGastosWithLatest(savedGastos) {
+function mergeGastosWithLatest(savedGastos, gastosEliminados = []) {
   const CORRECCIONES = [
     { id: "g2", siSigueEn: 10000, nuevo: { total: 9848, estado: (e) => (e === "Reservado" ? "Confirmado" : e) } },
     { id: "g13", siSigueEn: 150, nuevo: { total: 160 } },
@@ -1079,7 +1083,10 @@ function mergeGastosWithLatest(savedGastos) {
     return { ...g, ...cambios };
   });
   const savedIds = new Set(savedGastos.map((g) => g.id));
-  const nuevos = GASTOS_INIT.filter((g) => !savedIds.has(g.id));
+  // Igual que con los pagos: una partida que hayas borrado a propósito no vuelve nunca, aunque siga
+  // existiendo en GASTOS_INIT.
+  const eliminados = new Set(gastosEliminados);
+  const nuevos = GASTOS_INIT.filter((g) => !savedIds.has(g.id) && !eliminados.has(g.id));
   return nuevos.length ? [...merged, ...nuevos] : merged;
 }
 
@@ -1834,7 +1841,7 @@ function DevolucionesPanel({ deudas, devoluciones, setDevoluciones }) {
 // Pagos de una partida — desplegable dentro de la fila del gasto. Ya no hay una pestaña "Registro"
 // aparte: como todo pago está enlazado a una partida, se ve y se gestiona aquí mismo.
 // ─────────────────────────────────────────────────────────
-function PagosDePartida({ gasto, pagos, setPagos, guests, familias }) {
+function PagosDePartida({ gasto, pagos, setPagos, deletePago, guests, familias }) {
   const [adding, setAdding] = useState(false);
   const [newP, setNewP] = useState({ concepto: "", cantidad: "", fecha: "", metodo: "Transferencia", cuenta: "BBVA Boda", comentario: "", situacion: "Planificado", quien: "" });
   const [editP, setEditP] = useState(null);
@@ -1860,7 +1867,9 @@ function PagosDePartida({ gasto, pagos, setPagos, guests, familias }) {
     setPagos(pagos.map((p) => (p.id === editP ? { ...draftP, cantidad: +draftP.cantidad || 0, partida: gasto.id } : p)));
     setEditP(null);
   };
-  const delPago = (id) => { if (confirm("¿Eliminar este pago?")) setPagos(pagos.filter((p) => p.id !== id)); };
+  // Va por deletePago (no por setPagos) para que además quede anotado que lo borraste tú: si no, la
+  // migración que añade los pagos que trae la app te lo devolvería en la siguiente carga.
+  const delPago = (id) => { if (confirm("¿Eliminar este pago?")) deletePago(id); };
   const setSituacionPago = (id, val) => setPagos(pagos.map((p) => (p.id === id ? { ...p, situacion: val } : p)));
 
   return (
@@ -1972,7 +1981,7 @@ function PagosDePartida({ gasto, pagos, setPagos, guests, familias }) {
 // ─────────────────────────────────────────────────────────
 // TAB: GASTOS (editable) — incluye los pagos (desplegando cada partida) y los ingresos (p.ej. Regalos)
 // ─────────────────────────────────────────────────────────
-function TabGastos({ gastos, setGastos, pagos, setPagos, devoluciones, setDevoluciones, guests, familias, estimacionRegalos, setEstimacionRegalos }) {
+function TabGastos({ gastos, setGastos, deleteGasto, deletePago, pagos, setPagos, devoluciones, setDevoluciones, guests, familias, estimacionRegalos, setEstimacionRegalos }) {
   const [editing, setEditing] = useState(null); // id being edited
   const [draft, setDraft] = useState({});
   const [adding, setAdding] = useState(false);
@@ -2012,9 +2021,11 @@ function TabGastos({ gastos, setGastos, pagos, setPagos, devoluciones, setDevolu
     setEditing(null);
   };
   const removeG = (id) => {
-    if (confirm("¿Eliminar esta partida? Los pagos que tenga enlazados no se borran, se quedan sin partida.")) {
-      setGastos(gastos.filter((g) => g.id !== id));
-    }
+    const nPagos = pagos.filter((p) => p.partida === id).length;
+    const aviso = nPagos > 0
+      ? `¿Eliminar esta partida? Se borrarán también sus ${nPagos} pago${nPagos > 1 ? "s" : ""} registrado${nPagos > 1 ? "s" : ""}.`
+      : "¿Eliminar esta partida?";
+    if (confirm(aviso)) deleteGasto(id);
   };
   const addG = () => {
     if (!newG.c.trim()) return;
@@ -2075,7 +2086,7 @@ function TabGastos({ gastos, setGastos, pagos, setPagos, devoluciones, setDevolu
         {isExp && (
           <tr>
             <td colSpan={6} style={{ padding: 0, borderBottom: `1px solid ${C.grayMid}` }}>
-              <PagosDePartida gasto={g} pagos={pagos} setPagos={setPagos} guests={guests} familias={familias} />
+              <PagosDePartida gasto={g} pagos={pagos} setPagos={setPagos} deletePago={deletePago} guests={guests} familias={familias} />
             </td>
           </tr>
         )}
@@ -3309,6 +3320,11 @@ function BodaApp() {
   const [pagos, setPagosRaw] = useState(PAGOS_INIT);
   const [devoluciones, setDevolucionesRaw] = useState(DEVOLUCIONES_INIT);
   const [estimacionRegalos, setEstimacionRegalosRaw] = useState(ESTIMACION_REGALOS_INIT);
+  // Partidas y pagos que has borrado tú a propósito. Se recuerdan para siempre porque las migraciones
+  // que añaden lo nuevo de la app (mergeGastosWithLatest / mergePagosWithLatest) comparan por id: sin
+  // esta lista verían que "falta" lo que borraste y te lo devolverían en la siguiente carga.
+  const [gastosEliminados, setGastosEliminadosRaw] = useState([]);
+  const [pagosEliminados, setPagosEliminadosRaw] = useState([]);
   // Liquidez: saldos cuadrados a mano, traspasos entre cuentas y aportaciones mensuales previstas
   const [cuadres, setCuadresRaw] = useState(CUADRES_INIT);
   const [traspasos, setTraspasosRaw] = useState(TRASPASOS_INIT);
@@ -3346,9 +3362,14 @@ function BodaApp() {
     (async () => {
       const st = await loadState();
       if (st) {
+        // Se leen ANTES que nada: las migraciones de abajo las necesitan para no resucitar lo borrado.
+        const gEliminados = st.gastosEliminados || [];
+        const pEliminados = st.pagosEliminados || [];
+        setGastosEliminadosRaw(gEliminados);
+        setPagosEliminadosRaw(pEliminados);
         let mergedGastos = st.gastos;
         if (st.gastos) {
-          mergedGastos = mergeGastosWithLatest(st.gastos);
+          mergedGastos = mergeGastosWithLatest(st.gastos, gEliminados);
           setGastosRaw(mergedGastos);
         }
         let mergedGuests = st.guests;
@@ -3362,7 +3383,7 @@ function BodaApp() {
         if (st.pagos) {
           // Añade pagos nuevos de PAGOS_INIT (p.ej. el 50% del catering pagado el 11/08/2026) que no
           // tuvieras guardados todavía, sin duplicar ni tocar los que ya tenías.
-          mergedPagos = mergePagosWithLatest(st.pagos);
+          mergedPagos = mergePagosWithLatest(st.pagos, pEliminados);
         }
         // Por si tu navegador llegó a migrar (con una versión anterior de esta migración, con un bug) el
         // antiguo "Ajuste de conciliación" como si fuera un ingreso real de 895€: se quita, ya no hace
@@ -3452,6 +3473,8 @@ function BodaApp() {
             pagos: mergedPagos,
             devoluciones: st.devoluciones || devoluciones,
             estimacionRegalos: st.estimacionRegalos || estimacionRegalos,
+            gastosEliminados: gEliminados,
+            pagosEliminados: pEliminados,
             cuadres: st.cuadres || cuadres,
             traspasos: st.traspasos || traspasos,
             aportaciones: mergedAportaciones,
@@ -3478,13 +3501,37 @@ function BodaApp() {
     if (ok) setTimeout(() => setSaveStatus("idle"), 1800);
   }, []);
 
-  const snapshot = (over = {}) => ({ gastos, guests, pagos, devoluciones, estimacionRegalos, cuadres, traspasos, aportaciones, tablesConfig, mesasEliminadas, elementos, familias, bebidas, canciones, revisar, ...over });
+  const snapshot = (over = {}) => ({ gastos, guests, pagos, devoluciones, estimacionRegalos, gastosEliminados, pagosEliminados, cuadres, traspasos, aportaciones, tablesConfig, mesasEliminadas, elementos, familias, bebidas, canciones, revisar, ...over });
 
   const setGastos = (g) => { setGastosRaw(g); persist(snapshot({ gastos: g })); };
   const setGuests = (gu) => { setGuestsRaw(gu); persist(snapshot({ guests: gu })); };
   const setPagos = (p) => { setPagosRaw(p); persist(snapshot({ pagos: p })); };
   const setDevoluciones = (d) => { setDevolucionesRaw(d); persist(snapshot({ devoluciones: d })); };
   const setEstimacionRegalos = (e) => { setEstimacionRegalosRaw(e); persist(snapshot({ estimacionRegalos: e })); };
+  // Borrar una partida se lleva por delante sus pagos enlazados: si los dejásemos huérfanos seguirían
+  // moviendo el saldo de las cuentas (son dinero que salió de verdad) pero ya no se verían en ninguna
+  // parte, así que los números de liquidez cambiarían sin que se entendiera por qué. Todo se guarda de
+  // una sola vez —lista de borrados incluida— para que no se pierda nada si el navegador recarga justo
+  // en medio.
+  const deleteGasto = (id) => {
+    const g = gastos.filter((x) => x.id !== id);
+    const idsDeSusPagos = pagos.filter((p) => p.partida === id).map((p) => p.id);
+    const pg = pagos.filter((p) => p.partida !== id);
+    const ge = gastosEliminados.includes(id) ? gastosEliminados : [...gastosEliminados, id];
+    const pe = [...new Set([...pagosEliminados, ...idsDeSusPagos])];
+    setGastosRaw(g);
+    setPagosRaw(pg);
+    setGastosEliminadosRaw(ge);
+    setPagosEliminadosRaw(pe);
+    persist(snapshot({ gastos: g, pagos: pg, gastosEliminados: ge, pagosEliminados: pe }));
+  };
+  const deletePago = (id) => {
+    const pg = pagos.filter((p) => p.id !== id);
+    const pe = pagosEliminados.includes(id) ? pagosEliminados : [...pagosEliminados, id];
+    setPagosRaw(pg);
+    setPagosEliminadosRaw(pe);
+    persist(snapshot({ pagos: pg, pagosEliminados: pe }));
+  };
   const setCuadres = (c) => { setCuadresRaw(c); persist(snapshot({ cuadres: c })); };
   const setTraspasos = (t) => { setTraspasosRaw(t); persist(snapshot({ traspasos: t })); };
   const setAportaciones = (a) => { setAportacionesRaw(a); persist(snapshot({ aportaciones: a })); };
@@ -3511,6 +3558,8 @@ function BodaApp() {
     setPagosRaw(PAGOS_INIT);
     setDevolucionesRaw(DEVOLUCIONES_INIT);
     setEstimacionRegalosRaw(ESTIMACION_REGALOS_INIT);
+    setGastosEliminadosRaw([]);
+    setPagosEliminadosRaw([]);
     setCuadresRaw(CUADRES_INIT);
     setTraspasosRaw(TRASPASOS_INIT);
     const aportacionesReset = mergeAportacionesConMeses(APORTACIONES_INIT);
@@ -3522,15 +3571,20 @@ function BodaApp() {
     setBebidasRaw(BEBIDAS_INIT);
     setCancionesRaw(CANCIONES_INIT);
     setRevisarRaw(REVISAR_INIT);
-    persist({ gastos: GASTOS_INIT, guests: GUESTS_INIT, pagos: PAGOS_INIT, devoluciones: DEVOLUCIONES_INIT, estimacionRegalos: ESTIMACION_REGALOS_INIT, cuadres: CUADRES_INIT, traspasos: TRASPASOS_INIT, aportaciones: aportacionesReset, tablesConfig: MESAS_CONFIG_INIT, mesasEliminadas: [], elementos: ELEMENTOS_INIT, familias: FAMILIAS_INIT, bebidas: BEBIDAS_INIT, canciones: CANCIONES_INIT, revisar: REVISAR_INIT });
+    persist({ gastos: GASTOS_INIT, guests: GUESTS_INIT, pagos: PAGOS_INIT, devoluciones: DEVOLUCIONES_INIT, estimacionRegalos: ESTIMACION_REGALOS_INIT, gastosEliminados: [], pagosEliminados: [], cuadres: CUADRES_INIT, traspasos: TRASPASOS_INIT, aportaciones: aportacionesReset, tablesConfig: MESAS_CONFIG_INIT, mesasEliminadas: [], elementos: ELEMENTOS_INIT, familias: FAMILIAS_INIT, bebidas: BEBIDAS_INIT, canciones: CANCIONES_INIT, revisar: REVISAR_INIT });
   };
 
   // Recarga los datos guardados (útil si tu pareja ha hecho cambios desde su móvil)
   const refreshData = async () => {
     const st = await loadState();
     if (st) {
-      let nuevosGastos = st.gastos ? mergeGastosWithLatest(st.gastos) : gastos;
-      let nuevosPagos = limpiarPagosDuplicadosPorId(limpiarAjusteFantasma(st.pagos ? mergePagosWithLatest(st.pagos) : pagos));
+      // Lo borrado a propósito tampoco vuelve al refrescar (p.ej. cuando tu pareja guarda desde su móvil).
+      const gEliminados = st.gastosEliminados || gastosEliminados;
+      const pEliminados = st.pagosEliminados || pagosEliminados;
+      setGastosEliminadosRaw(gEliminados);
+      setPagosEliminadosRaw(pEliminados);
+      let nuevosGastos = st.gastos ? mergeGastosWithLatest(st.gastos, gEliminados) : gastos;
+      let nuevosPagos = limpiarPagosDuplicadosPorId(limpiarAjusteFantasma(st.pagos ? mergePagosWithLatest(st.pagos, pEliminados) : pagos));
       if (st.movimientos && st.movimientos.length) {
         const migrados = migrarMovimientosAPagos(st.movimientos, nuevosGastos);
         if (migrados.length) {
@@ -3682,7 +3736,7 @@ function BodaApp() {
           </p>
         </div>
         {tab === "finanzas" && <TabFinanzas gastos={gastos} setGastos={setGastos} guests={guests} pagos={pagos} devoluciones={devoluciones} estimacionRegalos={estimacionRegalos} cuadres={cuadres} setCuadres={setCuadres} traspasos={traspasos} setTraspasos={setTraspasos} aportaciones={aportaciones} setAportaciones={setAportaciones} />}
-        {tab === "gastos" && <TabGastos gastos={gastos} setGastos={setGastos} pagos={pagos} setPagos={setPagos} devoluciones={devoluciones} setDevoluciones={setDevoluciones} guests={guests} familias={familias} estimacionRegalos={estimacionRegalos} setEstimacionRegalos={setEstimacionRegalos} />}
+        {tab === "gastos" && <TabGastos gastos={gastos} setGastos={setGastos} deleteGasto={deleteGasto} deletePago={deletePago} pagos={pagos} setPagos={setPagos} devoluciones={devoluciones} setDevoluciones={setDevoluciones} guests={guests} familias={familias} estimacionRegalos={estimacionRegalos} setEstimacionRegalos={setEstimacionRegalos} />}
         {tab === "invitados" && <TabInvitados guests={guests} setGuests={setGuests} familias={familias} setFamilias={setFamilias} pagos={pagos} gastos={gastos} />}
         {tab === "mesas" && <TabMesas guests={guests} setGuests={setGuests} tablesConfig={tablesConfig} setTablesConfig={setTablesConfig} deleteMesa={deleteMesa} elementos={elementos} setElementos={setElementos} familias={familias} />}
         {tab === "cuestionario" && <TabCuestionario bebidas={bebidas} setBebidas={setBebidas} canciones={canciones} setCanciones={setCanciones} revisar={revisar} setRevisar={setRevisar} />}

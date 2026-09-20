@@ -312,18 +312,6 @@ const GUESTS_INIT = [
   { n: "Sonia", sex: "Mujer", desp: "Marga", comida: "Ou", mesa: 12, confirmado: "Si", familia: "F17", origen: "Formulario" },
 ].map((g, i) => ({ ...g, id: "guest_" + i }));
 
-// Nota: el importe de "Préstamo adicional (si hace falta)" y de "Resto catering + confirmar invitados"
-// ya NO se usan tal cual — se sustituyen en el render por el KPI "Préstamo adicional necesario" (gap) y
-// por el pendiente real de la partida Catering, que se recalculan en vivo con los gastos/pagos/invitados
-// actuales. Los números de aquí quedaron desactualizados y ya no se usan salvo como valor de respaldo.
-const PAGOS_HITOS = [
-  { hito: "Catering 50% señal (préstamo padres)", fecha: "11 agosto 2026 · ya realizado", importe: 7919.73, tipo: "amber" },
-  { hito: "Préstamo adicional (si hace falta)", fecha: "Antes de julio 2026", importe: 11107, tipo: "purple" },
-  { hito: "Reserva luna de miel (resto)", fecha: "Antes de julio 2026", importe: 8000, tipo: "purple" },
-  { hito: "Resto decoración", fecha: "1 octubre 2026", importe: 1395, tipo: "red" },
-  { hito: "Resto catering + confirmar invitados", fecha: "2 octubre 2026", importe: 8263, tipo: "red" },
-];
-
 // Cuentas: personales (pendiente devolver) vs cuenta compartida de la boda
 const CUENTAS = ["BBVA Boda", "Trade Republic Iván", "Caixa Marga", "Efectivo", "Préstamo padres", "Otra"];
 const METODOS = ["Transferencia", "Tarjeta", "Efectivo", "Bizum", "Otro"];
@@ -354,6 +342,83 @@ const DEVOLUCIONES_INIT = [];
 // Ingresos, y saber cuánto os falta por recibir en total.
 const ESTIMACION_REGALOS_INIT = { invitadosRestantes: 0, cantidadPorInvitado: 0 };
 
+// ─────────────────────────────────────────────────────────
+// LIQUIDEZ — saldo real de cada hucha, no una proyección
+// ─────────────────────────────────────────────────────────
+// Las únicas dos "cuentas" donde vive dinero de verdad que sea vuestro y esté disponible para pagar la
+// boda. El resto de valores de CUENTAS (Trade Republic Iván, Caixa Marga, Préstamo padres) NO son
+// huchas: son dinero que alguien adelantó y que hay que devolverle, y eso ya se sigue aparte en la
+// tarjeta "Pendiente de devolver" de la pestaña Gastos.
+const CUENTAS_LIQUIDEZ = ["BBVA Boda", "Efectivo"];
+const CUENTA_HUCHA = "BBVA Boda"; // donde caen las aportaciones mensuales
+
+// Un "cuadre" es el ancla de todo el cálculo de liquidez: dice que a fecha X, en la cuenta Y había
+// exactamente Z euros (lo que ves al mirar el banco o contar los sobres). A partir de ahí la app suma
+// y resta solo los movimientos POSTERIORES, en vez de intentar reconstruir el saldo desde cero
+// sumando meses teóricos — que es justo lo que antes nunca cuadraba con la realidad.
+// Convenio: el cuadre refleja el saldo al FINAL de ese día, así que los movimientos de ese mismo día
+// se consideran ya incluidos y no se vuelven a sumar.
+const CUADRES_INIT = [];
+
+// Dinero que se mueve de una cuenta a otra sin ser un gasto ni un ingreso de la boda. El caso típico:
+// ingresáis en BBVA un sobre de regalo que ya teníais contado en efectivo. Sin esto, ese dinero se
+// contaba dos veces (una como regalo recibido y otra como saldo del banco).
+const TRASPASOS_INIT = [];
+
+// Aportación mensual a la hucha boda. Antes era una constante del código que daba por hecho que todas
+// las aportaciones se habían hecho; ahora cada mes es una fila que se confirma cuando el dinero entra
+// de verdad, así la app sabe sola si falta alguna por meter.
+const APORTACION_MENSUAL_DEFECTO = 1750;
+const APORTACIONES_INIT = [];
+// Último mes que tiene sentido prever: el de la boda.
+const MES_BODA = "2026-10";
+
+// Fecha de hoy en formato ISO (YYYY-MM-DD), que es como se guardan todas las fechas de la app.
+const hoyISO = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+// "2026-09" a partir de una fecha ISO completa
+const mesISO = (iso) => (iso || "").slice(0, 7);
+// Suma n meses a un "YYYY-MM"
+const sumarMes = (ym, n) => {
+  const [a, m] = ym.split("-").map(Number);
+  const total = a * 12 + (m - 1) + n;
+  return `${Math.floor(total / 12)}-${String((total % 12) + 1).padStart(2, "0")}`;
+};
+const NOMBRE_MES = ["enero", "febrero", "marzo", "abril", "mayo", "junio", "julio", "agosto", "septiembre", "octubre", "noviembre", "diciembre"];
+const etiquetaMes = (ym) => {
+  const [a, m] = ym.split("-").map(Number);
+  return `${NOMBRE_MES[m - 1]} ${a}`;
+};
+
+// Genera las filas de aportación que falten, desde el mes actual hasta el de la boda. No borra ni toca
+// las que ya existan (con su importe y su "confirmada"), solo añade los meses que no estuvieran. Si
+// quieres saltarte un mes, pon su importe a 0 en vez de borrarlo: borrarlo haría que volviera a salir
+// en la siguiente carga.
+function mergeAportacionesConMeses(saved) {
+  const existentes = new Set((saved || []).map((a) => a.mes));
+  const nuevas = [];
+  let mes = mesISO(hoyISO());
+  // Si la boda ya pasó no hay nada que prever
+  let guardas = 0;
+  while (mes <= MES_BODA && guardas++ < 24) {
+    if (!existentes.has(mes)) {
+      nuevas.push({
+        id: "apo_" + mes,
+        mes,
+        fecha: `${mes}-01`,
+        importe: APORTACION_MENSUAL_DEFECTO,
+        cuenta: CUENTA_HUCHA,
+        confirmada: false,
+      });
+    }
+    mes = sumarMes(mes, 1);
+  }
+  if (!nuevas.length) return saved || [];
+  return [...(saved || []), ...nuevas].sort((a, b) => a.mes.localeCompare(b.mes));
+}
+
 // Registro 1 — Pagos a proveedores (cada uno enlazado a su partida del presupuesto)
 const PAGOS_INIT = [
   { concepto: "Reserva Finca",         cantidad: 1210, fecha: "2025-12-14", metodo: "Transferencia", cuenta: "Trade Republic Iván", partida: "g5",  comentario: "" },
@@ -374,7 +439,7 @@ const PAGOS_INIT = [
   // "Regalo Yoya" antes vivía en el desaparecido "Registro de movimientos de huchas" (+800€, hucha
   // Boda). Ahora que solo hay un registro (Pagos, todo enlazado a una partida), este ingreso se
   // representa como un "pago" a la partida "Regalos" (g17, tipo ingreso) — la cantidad SUMA a la
-  // hucha en vez de restar, porque saldoRealHucha() mira el tipo de la partida, no el signo a mano.
+  // hucha en vez de restar, porque el cálculo de saldo mira el tipo de la partida, no el signo a mano.
   { concepto: "Regalo Yoya",           cantidad: 800,  fecha: "2026-06-20", metodo: "Efectivo",      cuenta: "BBVA Boda",           partida: "g17", comentario: "" },
   { concepto: "Catering 50% señal (préstamo padres de Iván)", cantidad: 7919.73, fecha: "2026-08-11", metodo: "Transferencia", cuenta: "Préstamo padres", partida: "g1", comentario: "Sustituye a los dos pagos planificados anteriores (regalo familia Marga + hucha boda)", situacion: "Realizado" },
 ].map((p, i) => ({ ...p, id: "pago_" + i }));
@@ -680,17 +745,6 @@ const fmt = (n) =>
 const fmt2 = (n) =>
   OCULTAR_CANTIDADES ? MASCARA : "€" + Number(n).toLocaleString("es-ES", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-// Aportación mensual a la hucha boda (Iván ~1050 + Marga ~700)
-const APORTACION_BODA = { Enero: 1250, Febrero: 1450, Marzo: 1750, Abril: 1750, Mayo: 1750, Junio: 1750, Julio: 1750, Agosto: 1750, Septiembre: 1750, Octubre: 1750 };
-// El saldo inicial de la hucha Boda era 95€ (dato del Excel original), pero al reconciliar con el saldo
-// real del banco (6.189,15€ el 11/08/2026) tras corregir los duplicados y añadir los gastos de Mago y
-// Alianzas que faltaban, la única forma de que la cuenta salga exacta sin ningún ajuste manual es que el
-// saldo inicial real fuera 1.300€, no 95€ — así lo confirma también la fila "Inicial" de tu Excel de
-// seguimiento (pestaña "Evolución huchas", columna "Saldo T boda").
-// Ya no se sigue la hucha Viajes (ni la hucha Casa, que nunca llegó a usarse) — solo queda la hucha Boda,
-// que es la única relevante para lo que falta por planificar.
-const SALDO_INICIAL = { Boda: 1300 };
-
 // #1 — Pagado real por partida, derivado del registro de pagos
 const pagadoPorPartida = (pagos) => {
   const m = {};
@@ -705,55 +759,143 @@ const mesDeFecha = (iso) => {
   return MESES_ORDEN[idx] || null;
 };
 
-// #2 — Evolución REAL del saldo de la hucha boda, mes a mes, a partir del único registro que existe
-// ahora: los pagos. Cada pago que sale/entra de la cuenta "BBVA Boda" mueve la hucha; el signo (resta si
-// es un gasto, suma si es un ingreso como "Regalos") lo decide el tipo de la partida a la que está
-// enlazado, no el pago en sí — así no hace falta un registro aparte de "movimientos".
-const saldoRealHucha = (hucha, pagos, gastos) => {
-  const aport = hucha === "Boda" ? APORTACION_BODA : {};
-  const tipoPorPartida = {};
-  (gastos || []).forEach((g) => { tipoPorPartida[g.id] = g.tipo || "gasto"; });
-  const movPorMes = {};
-  MESES_ORDEN.forEach((mes) => { movPorMes[mes] = 0; });
-  pagos.forEach((p) => {
-    if (hucha !== "Boda" || !/bbva boda/i.test(p.cuenta)) return;
-    const mes = mesDeFecha(p.fecha);
-    if (!mes || movPorMes[mes] === undefined) return;
-    const esIngreso = tipoPorPartida[p.partida] === "ingreso";
-    movPorMes[mes] += esIngreso ? (+p.cantidad || 0) : -(+p.cantidad || 0);
-  });
-  // Recorrido acumulado hasta el mes actual (marzo 2026 → mostramos hasta el mes con datos)
-  let saldo = SALDO_INICIAL[hucha] || 0;
-  const serie = [{ mes: "Inicial", saldo }];
-  MESES_ORDEN.slice(0, 10).forEach((mes) => {
-    saldo += (aport[mes] || 0) + (movPorMes[mes] || 0);
-    serie.push({ mes: mes.slice(0, 3), saldo: Math.round(saldo) });
-  });
-  return serie;
+// ─────────────────────────────────────────────────────────
+// #2 — LIQUIDEZ REAL: cuánto dinero hay de verdad en cada cuenta, y cuánto habrá
+// ─────────────────────────────────────────────────────────
+// El signo de un pago lo decide el tipo de la partida a la que está enlazado: si la partida es de tipo
+// "ingreso" (los regalos), el dinero ENTRA en la cuenta; si es un gasto normal, SALE.
+const signoPago = (p, tipoPorPartida) => (tipoPorPartida[p.partida] === "ingreso" ? 1 : -1);
+
+const mapaTipoPartida = (gastos) => {
+  const m = {};
+  (gastos || []).forEach((g) => { m[g.id] = g.tipo || "gasto"; });
+  return m;
 };
 
-// Detalle de los pagos que mueven la hucha Boda cada mes (para el tooltip de la gráfica): por cada mes
-// abreviado ("Ene", "Feb"...) devuelve la lista de conceptos con su importe con signo (negativo si es un
-// gasto, positivo si es un ingreso como "Regalos") y, si hay aportación mensual ese mes, la incluye
-// también como una línea más.
-function detallePorMesHucha(hucha, pagos, gastos) {
-  const aport = hucha === "Boda" ? APORTACION_BODA : {};
-  const tipoPorPartida = {};
-  (gastos || []).forEach((g) => { tipoPorPartida[g.id] = g.tipo || "gasto"; });
-  const porMes = {};
-  MESES_ORDEN.forEach((mes) => { porMes[mes.slice(0, 3)] = []; });
-  MESES_ORDEN.forEach((mes) => {
-    if (aport[mes]) porMes[mes.slice(0, 3)].push({ concepto: "Aportación mensual", importe: aport[mes] });
+// El cuadre válido de una cuenta a una fecha dada: el más reciente que no sea posterior a esa fecha.
+function ultimoCuadre(cuenta, cuadres, hasta) {
+  return (cuadres || [])
+    .filter((c) => c.cuenta === cuenta && c.fecha && c.fecha <= hasta)
+    .sort((a, b) => b.fecha.localeCompare(a.fecha))[0] || null;
+}
+
+// Saldo REAL de una cuenta a una fecha (por defecto, hoy): parte del último cuadre que hayas hecho y le
+// aplica todos los movimientos posteriores que ya han ocurrido de verdad. Los pagos "Planificado" NO
+// cuentan aquí (todavía no han salido del banco); esos viven en la proyección, más abajo.
+// Si nunca has cuadrado esa cuenta devuelve null, para poder avisarte de que falta el dato de partida
+// en vez de enseñarte un 0 que parecería un saldo real.
+function saldoRealCuenta(cuenta, datos, hasta) {
+  const { cuadres, pagos, gastos, traspasos, aportaciones } = datos;
+  const fin = hasta || hoyISO();
+  const cuadre = ultimoCuadre(cuenta, cuadres, fin);
+  if (!cuadre) return null;
+  const tipoPorPartida = mapaTipoPartida(gastos);
+  // Estrictamente posterior al cuadre: el cuadre ya recoge lo de ese mismo día.
+  const enRango = (f) => !!f && f > cuadre.fecha && f <= fin;
+  let saldo = +cuadre.saldo || 0;
+  (pagos || []).forEach((p) => {
+    if (p.cuenta !== cuenta) return;
+    if ((p.situacion || "Realizado") !== "Realizado") return;
+    if (!enRango(p.fecha)) return;
+    saldo += signoPago(p, tipoPorPartida) * (+p.cantidad || 0);
   });
-  pagos.forEach((p) => {
-    if (hucha !== "Boda" || !/bbva boda/i.test(p.cuenta)) return;
-    const mes = mesDeFecha(p.fecha);
-    if (!mes) return;
-    const esIngreso = tipoPorPartida[p.partida] === "ingreso";
-    const importe = esIngreso ? (+p.cantidad || 0) : -(+p.cantidad || 0);
-    porMes[mes.slice(0, 3)].push({ concepto: p.concepto, importe });
+  (traspasos || []).forEach((t) => {
+    if (!enRango(t.fecha)) return;
+    if (t.desde === cuenta) saldo -= +t.cantidad || 0;
+    if (t.hacia === cuenta) saldo += +t.cantidad || 0;
   });
-  return porMes;
+  (aportaciones || []).forEach((a) => {
+    if (!a.confirmada || (a.cuenta || CUENTA_HUCHA) !== cuenta) return;
+    if (!enRango(a.fecha)) return;
+    saldo += +a.importe || 0;
+  });
+  return saldo;
+}
+
+// Todos los movimientos de dinero que TODAVÍA NO HAN OCURRIDO, ordenados por fecha. Alimenta el
+// calendario de caja: para cada uno se sabe qué día es, cuánto mueve, en qué cuenta y de dónde sale.
+//   · pagos marcados como "Planificado"
+//   · el pendiente de cada partida a la que le hayas puesto fecha prevista de pago
+//   · las aportaciones mensuales que aún no has confirmado
+// OJO con las fechas pasadas: un movimiento con fecha ya vencida pero que sigue sin hacerse (la
+// aportación de este mes que aún no habéis metido, una partida cuya fecha prevista se os pasó) NO se
+// esconde — se queda en el calendario marcado como atrasado. Si lo filtrásemos por "ya pasó", ese
+// dinero dejaría de contarse y la previsión saldría mejor de lo que es en realidad.
+// Un pago planificado ya descuenta del pendiente de su partida (pagadoPorPartida cuenta planificados y
+// realizados por igual), así que incluir los dos aquí no duplica nada.
+function eventosFuturos(datos) {
+  const { pagos, gastos, aportaciones } = datos;
+  const hoy = hoyISO();
+  const tipoPorPartida = mapaTipoPartida(gastos);
+  const nombrePartida = {};
+  (gastos || []).forEach((g) => { nombrePartida[g.id] = g.c; });
+  const ev = [];
+
+  (pagos || []).forEach((p) => {
+    if ((p.situacion || "Realizado") !== "Planificado") return;
+    if (!p.fecha) return;
+    if (!CUENTAS_LIQUIDEZ.includes(p.cuenta)) return;
+    ev.push({
+      id: "pag_" + (p.id || p.concepto + p.fecha),
+      fecha: p.fecha,
+      concepto: p.concepto || "Pago planificado",
+      detalle: nombrePartida[p.partida] || "",
+      cuenta: p.cuenta,
+      importe: signoPago(p, tipoPorPartida) * (+p.cantidad || 0),
+      origen: "pago",
+      atrasado: p.fecha < hoy,
+    });
+  });
+
+  const pagado = pagadoPorPartida(pagos || []);
+  (gastos || []).forEach((g) => {
+    if ((g.tipo || "gasto") === "ingreso") return;
+    const pend = (+g.total || 0) - (pagado[g.id] || 0);
+    if (pend <= 0.5) return;
+    if (!g.fechaPrevista) return;
+    ev.push({
+      id: "part_" + g.id,
+      fecha: g.fechaPrevista,
+      concepto: `Resto ${g.c}`,
+      detalle: "Pendiente de la partida",
+      cuenta: g.cuentaPrevista || CUENTA_HUCHA,
+      importe: -pend,
+      origen: "partida",
+      atrasado: g.fechaPrevista < hoy,
+    });
+  });
+
+  (aportaciones || []).forEach((a) => {
+    if (a.confirmada) return;
+    if (!a.fecha) return;
+    if (!(+a.importe)) return;
+    ev.push({
+      id: "apo_" + a.mes,
+      fecha: a.fecha,
+      concepto: `Aportación de ${etiquetaMes(a.mes)}`,
+      detalle: "Aportación mensual a la hucha",
+      cuenta: a.cuenta || CUENTA_HUCHA,
+      importe: +a.importe || 0,
+      origen: "aportacion",
+      atrasado: a.fecha < hoy,
+    });
+  });
+
+  return ev.sort((a, b) => a.fecha.localeCompare(b.fecha) || a.concepto.localeCompare(b.concepto));
+}
+
+// Calendario de caja: coge los saldos reales de hoy y va aplicando los eventos futuros uno a uno, para
+// saber con cuánto os quedáis en cada cuenta después de cada movimiento. Es la vista que contesta
+// "¿nos llega para pagarlo todo el 1 de octubre?" sin tener que echar cuentas a mano.
+function calendarioCaja(datos) {
+  const saldos = {};
+  CUENTAS_LIQUIDEZ.forEach((c) => { saldos[c] = saldoRealCuenta(c, datos) || 0; });
+  const filas = eventosFuturos(datos).map((e) => {
+    saldos[e.cuenta] = (saldos[e.cuenta] || 0) + e.importe;
+    const total = CUENTAS_LIQUIDEZ.reduce((s, c) => s + (saldos[c] || 0), 0);
+    return { ...e, saldoCuenta: saldos[e.cuenta], saldoTotal: total, negativo: saldos[e.cuenta] < -0.5 };
+  });
+  return filas;
 }
 
 // ─────────────────────────────────────────────────────────
@@ -1277,126 +1419,355 @@ function LineChartSVG({ series, height = 230, hoyMes, detalleMes }) {
   );
 }
 
-function TabFinanzas({ gastos, guests, pagos, devoluciones }) {
+// ─────────────────────────────────────────────────────────
+// TAB: FINANZAS — girada del todo alrededor de la LIQUIDEZ REAL
+// ─────────────────────────────────────────────────────────
+// Antes esta pestaña proyectaba el saldo de la hucha a partir de un saldo inicial fijo del Excel más
+// unas aportaciones mensuales escritas en el código, dando por hecho que todas se habían hecho. Por eso
+// decía que en octubre habría 11.439€ cuando en el banco había 2.755€: era una previsión teórica, no
+// dinero. Ahora el punto de partida es lo que tú cuadras ("hoy en BBVA Boda hay X"), y todo lo demás
+// se calcula hacia adelante desde ahí.
+function TabFinanzas({ gastos, setGastos, guests, pagos, devoluciones, estimacionRegalos, cuadres, setCuadres, traspasos, setTraspasos, aportaciones, setAportaciones }) {
+  const [cuadrando, setCuadrando] = useState(null);      // cuenta que estás cuadrando ahora mismo
+  const [draftCuadre, setDraftCuadre] = useState({ saldo: "", fecha: "" });
+  const [nuevoTraspaso, setNuevoTraspaso] = useState(null); // objeto en edición, o null si el form está cerrado
+
+  const datos = { cuadres, pagos, gastos, traspasos, aportaciones };
   const paidMap = pagadoPorPartida(pagos);
-  // Lo que ya se debe a los padres de Iván (préstamo del 11/08/2026 para el catering) menos lo que ya
-  // se les haya ido devolviendo — mismo cálculo que en la pestaña Gastos, aquí solo para el aviso.
-  const debePadres = Math.max(0, pagos.filter((p) => cuentaPersona(p.cuenta) === "Padres").reduce((s, p) => s + (+p.cantidad || 0), 0)
-    - (devoluciones || []).filter((d) => d.quien === "Padres").reduce((s, d) => s + (+d.cantidad || 0), 0));
-  // Los KPIs de presupuesto/pagado solo cuentan partidas de tipo "gasto" — los "ingresos" (p.ej.
-  // "Regalos") no son un gasto que haya que cubrir, así que no deben inflar el presupuesto total.
+  const hoy = hoyISO();
+
+  // ── Liquidez de hoy
+  const saldoPorCuenta = {};
+  CUENTAS_LIQUIDEZ.forEach((c) => { saldoPorCuenta[c] = saldoRealCuenta(c, datos); });
+  const cuentasSinCuadrar = CUENTAS_LIQUIDEZ.filter((c) => saldoPorCuenta[c] === null);
+  const disponibleHoy = CUENTAS_LIQUIDEZ.reduce((s, c) => s + (saldoPorCuenta[c] || 0), 0);
+
+  // ── Presupuesto (esto ya funcionaba bien, se conserva tal cual pero más abajo)
   const gastosPartidas = gastos.filter((g) => g.tipo !== "ingreso");
   const totalPres = gastosPartidas.reduce((s, g) => s + g.total, 0);
-  const totalPaid = gastosPartidas.reduce((s, g) => s + (paidMap[g.id] || 0), 0);  // #1 pagado real
-  // Regalos ya recibidos en efectivo (familia de Marga, Yoya si la cobrasteis en mano, etc.) que NO han
-  // pasado por la cuenta BBVA Boda: se calcula en vivo como ingresos menos gastos de la cuenta
-  // "Efectivo", para que cuente automáticamente tanto lo recibido como lo que ya se haya gastado de ahí
-  // (p.ej. si el regalo de la familia de Marga se llega a usar en otra cosa, deja de contarse aquí solo
-  // porque ya estaría dentro de totalPaid). El regalo de Yoya que SÍ pasó por BBVA Boda no se repite
-  // aquí — ya suma directamente al saldo de la hucha (huchaOct, más abajo).
-  const tipoPorPartidaFin = {};
-  gastos.forEach((g) => { tipoPorPartidaFin[g.id] = g.tipo || "gasto"; });
-  const efectivoDisponible = pagos.filter((p) => /^efectivo$/i.test((p.cuenta || "").trim())).reduce((s, p) => {
-    const esIngreso = tipoPorPartidaFin[p.partida] === "ingreso";
-    return s + (esIngreso ? (+p.cantidad || 0) : -(+p.cantidad || 0));
-  }, 0);
-  // Solo queda como recurso todavía pendiente (no recibido) el regalo de la familia de Iván, confirmado
-  // para antes de la boda.
-  const familias = 6918.45;
-  const cubierto = totalPaid + familias + efectivoDisponible;
-  const pendienteReal = totalPres - cubierto;
-  // Saldo real de la hucha boda proyectado a octubre — se recalcula en vivo desde el único registro que
-  // existe ahora (los pagos, cada uno enlazado a una partida), en vez de quedarse fijo en un número que
-  // se desactualiza con cada pago nuevo.
-  const serieBoda = saldoRealHucha("Boda", pagos, gastos);
-  const huchaOct = (serieBoda.find((d) => d.mes === "Oct") || {}).saldo || 0;
-  const gap = Math.max(0, pendienteReal - huchaOct);
-  // Pendiente real de la partida Catering (para el hito "Resto catering"), en vivo desde sus pagos.
-  const restoCatering = Math.max(0, ((gastos.find((g) => g.id === "g1") || {}).total || 0) - (paidMap["g1"] || 0));
-  // Detalle de pagos/aportaciones por mes, para el tooltip de la gráfica (qué se movió ese mes).
-  const detalleBoda = detallePorMesHucha("Boda", pagos, gastos);
+  const totalPaid = gastosPartidas.reduce((s, g) => s + (paidMap[g.id] || 0), 0);
+  const pendienteTotal = Math.max(0, totalPres - totalPaid);
+  const debePadres = Math.max(0, pagos.filter((p) => cuentaPersona(p.cuenta) === "Padres").reduce((s, p) => s + (+p.cantidad || 0), 0)
+    - (devoluciones || []).filter((d) => d.quien === "Padres").reduce((s, d) => s + (+d.cantidad || 0), 0));
 
-  // Adultos que asisten = no han rechazado y no son niños ni "No"
+  // ── Proyección
+  const calendario = calendarioCaja(datos);
+  const saldoFinal = calendario.length ? calendario[calendario.length - 1].saldoTotal : disponibleHoy;
+  const minimo = calendario.reduce((min, f) => (f.saldoTotal < min.saldoTotal ? f : min),
+    { saldoTotal: disponibleHoy, fecha: hoy, concepto: "Saldo de hoy" });
+  const llegais = minimo.saldoTotal >= -0.5;
+
+  // Partidas que aún no has planificado: tienen pendiente pero no les has puesto fecha, así que no
+  // aparecen en el calendario y el veredicto de arriba se queda corto. Conviene avisar.
+  const sinPlanificar = gastosPartidas.filter((g) => {
+    const pend = (+g.total || 0) - (paidMap[g.id] || 0);
+    return pend > 0.5 && !g.fechaPrevista;
+  });
+  const importeSinPlanificar = sinPlanificar.reduce((s, g) => s + ((+g.total || 0) - (paidMap[g.id] || 0)), 0);
+
+  const regalosPendientes = (+(estimacionRegalos || {}).invitadosRestantes || 0) * (+(estimacionRegalos || {}).cantidadPorInvitado || 0);
+
+  // Adultos que asisten (para la estimación de regalos del día de la boda)
   const asisten = guests.filter((g) => g.confirmado !== "No" && g.comida !== "No");
   const nAdultos = asisten.filter((g) => g.comida !== "Niño").length;
-  const nConfirmados = guests.filter((g) => g.confirmado === "Si").length;
-  const regalosMin = nAdultos * 180;
 
-  const pct = (x) => ((x / totalPres) * 100).toFixed(1);
+  // ── Acciones
+  const abrirCuadre = (cuenta) => {
+    setCuadrando(cuenta);
+    const actual = ultimoCuadre(cuenta, cuadres, hoy);
+    setDraftCuadre({ saldo: actual ? actual.saldo : "", fecha: hoy });
+  };
+  const guardarCuadre = () => {
+    const saldo = +draftCuadre.saldo;
+    if (!draftCuadre.fecha || Number.isNaN(saldo)) return;
+    // Un cuadre por cuenta y día: si vuelves a cuadrar el mismo día, se reemplaza en vez de acumular.
+    const resto = cuadres.filter((c) => !(c.cuenta === cuadrando && c.fecha === draftCuadre.fecha));
+    setCuadres([...resto, { id: "cua_" + Date.now(), cuenta: cuadrando, fecha: draftCuadre.fecha, saldo }]);
+    setCuadrando(null);
+  };
+  const borrarCuadre = (id) => {
+    if (confirm("¿Borrar este cuadre? El saldo volverá a calcularse desde el cuadre anterior de esa cuenta.")) {
+      setCuadres(cuadres.filter((c) => c.id !== id));
+    }
+  };
+
+  const abrirTraspaso = () => setNuevoTraspaso({ desde: "Efectivo", hacia: CUENTA_HUCHA, cantidad: "", fecha: hoy, concepto: "" });
+  const guardarTraspaso = () => {
+    const cantidad = +nuevoTraspaso.cantidad || 0;
+    if (cantidad <= 0 || nuevoTraspaso.desde === nuevoTraspaso.hacia) return;
+    setTraspasos([...traspasos, { ...nuevoTraspaso, id: "tra_" + Date.now(), cantidad }]);
+    setNuevoTraspaso(null);
+  };
+  const borrarTraspaso = (id) => setTraspasos(traspasos.filter((t) => t.id !== id));
+
+  const actualizarAportacion = (mes, campos) => {
+    setAportaciones(aportaciones.map((a) => (a.mes === mes ? { ...a, ...campos } : a)));
+  };
+
+  const actualizarPartida = (id, campos) => {
+    setGastos(gastos.map((g) => (g.id === id ? { ...g, ...campos } : g)));
+  };
+
+  const fechaCorta = (iso) => {
+    if (!iso) return "";
+    const [a, m, d] = iso.split("-");
+    return `${d} ${NOMBRE_MES[+m - 1].slice(0, 3)}`;
+  };
 
   return (
     <div>
+      {/* ── LIQUIDEZ DE HOY ────────────────────────────────────────── */}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(160px,1fr))", gap: 12, marginBottom: 16 }}>
-        <KPI label="Presupuesto total" value={fmt(totalPres)} sub={`${gastosPartidas.length} partidas`} color={C.rose} />
-        <KPI label="Cubierto" value={fmt(cubierto)} sub={`${pct(cubierto)}% del total`} color={C.teal} />
-        <KPI label="Pendiente real" value={fmt(pendienteReal)} sub={`${pct(pendienteReal)}% restante`} color={C.red} />
-        <KPI label="Préstamo adicional necesario" value={fmt(gap)} sub="Por encima del préstamo padres ya pedido" color={C.purple} />
-        <KPI label="Regalos estimados" value={fmt(regalosMin)} sub={`${nAdultos} adultos × ${fmt(180)} · ${nConfirmados} confirm.`} color={C.teal} />
-        <KPI label="Debéis a los padres" value={fmt(debePadres)} sub="Préstamo catering, 11 ago 2026" color={C.amber} />
+        {CUENTAS_LIQUIDEZ.map((c) => (
+          <KPI
+            key={c}
+            label={c === CUENTA_HUCHA ? "Cuenta de boda" : c}
+            value={saldoPorCuenta[c] === null ? "—" : fmt(saldoPorCuenta[c])}
+            sub={saldoPorCuenta[c] === null ? "Sin cuadrar todavía" : `Cuadrado el ${fechaCorta((ultimoCuadre(c, cuadres, hoy) || {}).fecha)}`}
+            color={c === CUENTA_HUCHA ? C.teal : C.amber}
+          />
+        ))}
+        <KPI label="Disponible hoy" value={fmt(disponibleHoy)} sub="Las dos cuentas juntas" color={C.blue} />
+        <KPI label="Queda por pagar" value={fmt(pendienteTotal)} sub={`De ${fmt(totalPres)} de presupuesto`} color={C.red} />
+        <KPI
+          label={llegais ? "Sobra al final" : "Falta en el peor momento"}
+          value={fmt(Math.abs(llegais ? saldoFinal : minimo.saldoTotal))}
+          sub={llegais ? "Tras pagarlo todo" : `El ${fechaCorta(minimo.fecha)}`}
+          color={llegais ? C.green : C.red}
+        />
       </div>
 
-      <Card title={`Cobertura financiera — ${fmt(totalPres)}`} style={{ marginBottom: 14 }}>
-        <div style={{ height: 20, background: C.grayLight, borderRadius: 10, overflow: "hidden", display: "flex", marginBottom: 10 }}>
-          <div style={{ width: pct(totalPaid) + "%", background: C.teal }} title={`Pagado ${fmt(totalPaid)}`} />
-          <div style={{ width: pct(efectivoDisponible) + "%", background: C.amber }} title={`Efectivo ya recibido, sin gastar (familia Marga, etc.) ${fmt(efectivoDisponible)}`} />
-          <div style={{ width: pct(6918.45) + "%", background: "#5DCAA5" }} title="Familia Iván (a confirmar fecha)" />
-          <div style={{ width: pct(huchaOct) + "%", background: "#AFA9EC" }} title="Hucha boda oct" />
+      {/* ── AVISO: sin cuadrar ─────────────────────────────────────── */}
+      {cuentasSinCuadrar.length > 0 && (
+        <Card style={{ marginBottom: 14, background: C.blueLight, border: `1px solid ${C.blue}33` }}>
+          <div style={{ fontSize: 13, color: C.blue }}>
+            <strong>👋 Empieza por aquí:</strong> para que todos los números de esta pestaña sean reales, dinos cuánto dinero hay <em>ahora mismo</em> en {cuentasSinCuadrar.join(" y en ")}. Mira el saldo del banco (o cuenta los sobres) y pulsa "Cuadrar saldo" en la tarjeta de abajo. A partir de ese momento la app lleva la cuenta sola con cada pago, ingreso y traspaso que registres.
+          </div>
+        </Card>
+      )}
+
+      {/* ── VEREDICTO ──────────────────────────────────────────────── */}
+      <Card style={{ marginBottom: 14, background: llegais ? C.greenLight : C.redLight, border: `1px solid ${llegais ? C.green : C.red}33` }}>
+        <div style={{ fontSize: 14, color: llegais ? C.green : C.red, fontWeight: 600, marginBottom: 6 }}>
+          {llegais
+            ? `✅ Con lo previsto, llegáis: en el momento más justo os quedan ${fmt(minimo.saldoTotal)}.`
+            : `⚠️ Con lo previsto no llegáis: el ${fechaCorta(minimo.fecha)} os faltarían ${fmt(Math.abs(minimo.saldoTotal))}.`}
         </div>
-        <div style={{ display: "flex", flexWrap: "wrap", gap: "5px 16px", fontSize: 11, color: C.sub }}>
-          {[
-            [C.teal, `Pagado ${fmt(totalPaid)}`],
-            [C.amber, `Efectivo sin gastar ${fmt(efectivoDisponible)} (familia Marga, etc.)`],
-            ["#5DCAA5", `Familia Iván ${fmt(6918.45)} (a confirmar fecha)`],
-            ["#AFA9EC", `Hucha boda (oct) ${fmt(huchaOct)}`],
-            [C.grayLight, `Sin cubrir ${fmt(gap)}`],
-          ].map(([col, lbl], i) => (
-            <span key={i} style={{ display: "flex", alignItems: "center", gap: 4 }}>
-              <span style={{ width: 9, height: 9, borderRadius: 2, background: col, border: col === C.grayLight ? "1px solid #ccc" : "none", display: "inline-block" }} />
-              {lbl}
-            </span>
-          ))}
+        <div style={{ fontSize: 12, color: C.sub }}>
+          Hoy tenéis {fmt(disponibleHoy)} entre las dos cuentas. Contando los pagos planificados, el pendiente de las partidas que ya tienen fecha y las aportaciones mensuales que falten por meter, acabaríais con {fmt(saldoFinal)}.
+          {importeSinPlanificar > 0.5 && <> Ojo: hay {fmt(importeSinPlanificar)} en {sinPlanificar.length} partida{sinPlanificar.length > 1 ? "s" : ""} sin fecha de pago, que todavía <strong>no</strong> están contados aquí.</>}
+          {regalosPendientes > 0 && <> Aparte, esperáis unos {fmt(regalosPendientes)} más en regalos de invitados, que tampoco se cuentan hasta que los recibáis.</>}
         </div>
       </Card>
 
-      <Card title="📈 Evolución real de la hucha boda (calculada desde el registro de pagos)" style={{ marginBottom: 14 }}>
-        <LineChartSVG
-          hoyMes={MES_ACTUAL_ABREV}
-          detalleMes={detalleBoda}
-          series={[
-            { data: serieBoda, color: C.rose },
-            { data: [1300, 2550, 4000, 5750, 7500, 9250, 11000, 12750, 14500, 16250, 18000].map((v, i) => ({ mes: ["Ini", "Ene", "Feb", "Mar", "Abr", "May", "Jun", "Jul", "Ago", "Sep", "Oct"][i], saldo: v })), color: C.roseMid, dashed: true },
-          ]}
-        />
-        <div style={{ display: "flex", flexWrap: "wrap", gap: 14, fontSize: 11, color: C.sub, marginTop: 8 }}>
-          <span style={{ display: "flex", alignItems: "center", gap: 4 }}><span style={{ width: 10, height: 3, background: C.rose, display: "inline-block" }} />Real (desde vuestro registro de pagos)</span>
-          <span style={{ display: "flex", alignItems: "center", gap: 4 }}><span style={{ width: 10, height: 3, background: C.roseMid, display: "inline-block" }} />Teórica (proyección original del Excel)</span>
-          <span style={{ display: "flex", alignItems: "center", gap: 4 }}><span style={{ width: 8, height: 8, borderRadius: "50%", background: "#B06D15", display: "inline-block" }} />Hoy</span>
-        </div>
-        <div style={{ marginTop: 10, padding: "9px 13px", background: C.grayLight, borderRadius: 8, fontSize: 12, color: C.sub }}>
-          Esta curva se recalcula sola con cada pago que registréis (gastos y también ingresos, como los regalos recibidos). La aportación mensual a la hucha boda es de {fmt(1750)} (Iván ~{fmt(1050)} + Marga ~{fmt(700)}). Pasa el ratón (o toca, en el móvil) por cualquier punto para ver el detalle de ese mes: la aportación, cada gasto o ingreso, y el saldo resultante.
-        </div>
-      </Card>
-
-      <Card title="📅 Próximos hitos de pago">
-        {PAGOS_HITOS.map((p, i) => {
-          // El importe del préstamo adicional y del resto de catering se recalculan en vivo (KPI
-          // "Préstamo adicional necesario" y pendiente real de Catering) en vez de quedarse fijos en el
-          // valor con el que se calcularon por primera vez estos hitos.
-          const importe = p.hito === "Préstamo adicional (si hace falta)" ? gap
-            : p.hito === "Resto catering + confirmar invitados" ? restoCatering
-            : p.importe;
-          const colors = { purple: [C.purpleLight, C.purple], amber: [C.amberLight, C.amber], red: [C.redLight, C.red] };
-          const [bg, fg] = colors[p.tipo];
-          return (
-            <div key={i} style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "10px 12px", background: bg, borderRadius: 8, borderLeft: `3px solid ${fg}`, marginBottom: 8 }}>
-              <div>
-                <div style={{ fontSize: 13, fontWeight: 600 }}>{p.hito}</div>
-                <div style={{ fontSize: 11, color: C.sub }}>{p.fecha}</div>
+      {/* ── CUENTAS Y CUADRES ──────────────────────────────────────── */}
+      <Card title="🏦 Vuestras cuentas — saldo real" style={{ marginBottom: 14 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(260px,1fr))", gap: 14 }}>
+          {CUENTAS_LIQUIDEZ.map((c) => {
+            const cuadre = ultimoCuadre(c, cuadres, hoy);
+            const editando = cuadrando === c;
+            return (
+              <div key={c} style={{ border: `1px solid ${C.grayMid}`, borderRadius: 10, padding: "14px 16px" }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8 }}>
+                  <span style={{ fontSize: 13, fontWeight: 700 }}>{c === CUENTA_HUCHA ? "🏦 " : "💵 "}{c}</span>
+                  <span style={{ fontSize: 19, fontWeight: 700, color: (saldoPorCuenta[c] || 0) < 0 ? C.red : C.teal }}>
+                    {saldoPorCuenta[c] === null ? "—" : fmt(saldoPorCuenta[c])}
+                  </span>
+                </div>
+                {editando ? (
+                  <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+                    <Input type="number" placeholder="Saldo real €" value={draftCuadre.saldo} onChange={(v) => setDraftCuadre({ ...draftCuadre, saldo: v })} style={{ width: 110 }} />
+                    <Input type="date" value={draftCuadre.fecha} onChange={(v) => setDraftCuadre({ ...draftCuadre, fecha: v })} style={{ width: 140 }} />
+                    <Btn small variant="primary" onClick={guardarCuadre}>Guardar</Btn>
+                    <Btn small variant="ghost" onClick={() => setCuadrando(null)}>✕</Btn>
+                  </div>
+                ) : (
+                  <>
+                    <div style={{ fontSize: 11, color: C.sub, marginBottom: 10 }}>
+                      {cuadre
+                        ? <>Último cuadre: {fmt(cuadre.saldo)} el {fechaCorta(cuadre.fecha)}. Desde entonces la app ha aplicado sola los movimientos que has registrado.</>
+                        : <>Todavía no has dicho cuánto hay de verdad en esta cuenta.</>}
+                    </div>
+                    <Btn small variant="teal" onClick={() => abrirCuadre(c)}>⚖️ Cuadrar saldo</Btn>
+                  </>
+                )}
               </div>
-              <div style={{ fontSize: 15, fontWeight: 700, color: fg }}>{fmt(importe)}</div>
+            );
+          })}
+        </div>
+        {cuadres.length > 0 && (
+          <div style={{ marginTop: 14 }}>
+            <div style={{ fontSize: 11, color: C.sub, marginBottom: 6, textTransform: "uppercase", letterSpacing: ".5px", fontWeight: 600 }}>Histórico de cuadres</div>
+            {[...cuadres].sort((a, b) => b.fecha.localeCompare(a.fecha)).map((c) => (
+              <div key={c.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12, padding: "5px 0", borderBottom: `1px solid ${C.grayLight}` }}>
+                <span>{fechaCorta(c.fecha)} · {c.cuenta}</span>
+                <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                  <strong>{fmt(c.saldo)}</strong>
+                  <Btn small variant="ghost" onClick={() => borrarCuadre(c.id)}>🗑</Btn>
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+      </Card>
+
+      {/* ── CALENDARIO DE CAJA ─────────────────────────────────────── */}
+      <Card title="📅 Calendario de caja — qué sale, de dónde, y con cuánto os quedáis" style={{ padding: 0, overflow: "hidden", marginBottom: 14 }}>
+        {calendario.length === 0 ? (
+          <div style={{ padding: "18px 20px", fontSize: 13, color: C.sub }}>
+            Todavía no hay nada previsto. Ponle fecha de pago a las partidas que os quedan (justo aquí abajo) y aparecerán en este calendario con el saldo que os deja cada una.
+          </div>
+        ) : (
+          <div className="boda-scroll-x" style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse" }}>
+              <thead>
+                <tr>
+                  {["Fecha", "Concepto", "Cuenta", "Importe", "Saldo cuenta", "Saldo total"].map((h) => (
+                    <th key={h} style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: ".5px", color: C.sub, textAlign: "left", padding: "10px 12px", borderBottom: `1px solid ${C.grayMid}`, background: C.grayLight }}>{h}</th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                <tr>
+                  <td style={{ padding: "9px 12px", fontSize: 12, color: C.sub, borderBottom: `1px solid ${C.grayLight}` }}>Hoy</td>
+                  <td style={{ padding: "9px 12px", fontSize: 12, color: C.sub, borderBottom: `1px solid ${C.grayLight}` }} colSpan={3}>Punto de partida (saldos cuadrados)</td>
+                  <td style={{ borderBottom: `1px solid ${C.grayLight}` }} />
+                  <td style={{ padding: "9px 12px", fontSize: 13, fontWeight: 700, borderBottom: `1px solid ${C.grayLight}` }}>{fmt(disponibleHoy)}</td>
+                </tr>
+                {calendario.map((f) => (
+                  <tr key={f.id} style={{ background: f.saldoTotal < -0.5 ? C.redLight : "transparent" }}>
+                    <td style={{ padding: "9px 12px", fontSize: 12, borderBottom: `1px solid ${C.grayLight}`, whiteSpace: "nowrap", color: f.atrasado ? C.amber : C.text, fontWeight: f.atrasado ? 700 : 400 }}>
+                      {f.atrasado ? "⚠️ " : ""}{fechaCorta(f.fecha)}
+                    </td>
+                    <td style={{ padding: "9px 12px", fontSize: 13, borderBottom: `1px solid ${C.grayLight}` }}>
+                      {f.concepto}
+                      {f.atrasado && <span style={{ fontSize: 10, color: C.amber, fontWeight: 700, marginLeft: 6 }}>ATRASADO</span>}
+                      {f.detalle && <div style={{ fontSize: 10, color: C.sub }}>{f.detalle}</div>}
+                    </td>
+                    <td style={{ padding: "9px 12px", fontSize: 12, color: C.sub, borderBottom: `1px solid ${C.grayLight}`, whiteSpace: "nowrap" }}>{f.cuenta}</td>
+                    <td style={{ padding: "9px 12px", fontSize: 13, fontWeight: 600, color: f.importe < 0 ? C.red : C.teal, borderBottom: `1px solid ${C.grayLight}`, whiteSpace: "nowrap" }}>
+                      {f.importe < 0 ? "−" : "+"}{fmt(Math.abs(f.importe))}
+                    </td>
+                    <td style={{ padding: "9px 12px", fontSize: 12, color: f.negativo ? C.red : C.sub, borderBottom: `1px solid ${C.grayLight}`, fontWeight: f.negativo ? 700 : 400 }}>{fmt(f.saldoCuenta)}</td>
+                    <td style={{ padding: "9px 12px", fontSize: 13, fontWeight: 700, color: f.saldoTotal < -0.5 ? C.red : C.text, borderBottom: `1px solid ${C.grayLight}` }}>{fmt(f.saldoTotal)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
+
+      {/* ── PLANIFICACIÓN DE PAGOS PENDIENTES ──────────────────────── */}
+      <Card title="🗓 Cuándo y de dónde pagáis lo que queda" style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 12, color: C.sub, marginBottom: 12 }}>
+          Ponle a cada partida la fecha en que tenéis que pagarla y desde qué cuenta sale. Es lo que alimenta el calendario de arriba: sin fecha, ese dinero no se cuenta en la previsión.
+        </div>
+        <div className="boda-scroll-x" style={{ overflowX: "auto" }}>
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr>
+                {["Partida", "Pendiente", "Fecha prevista", "Sale de"].map((h) => (
+                  <th key={h} style={{ fontSize: 11, fontWeight: 600, textTransform: "uppercase", letterSpacing: ".5px", color: C.sub, textAlign: "left", padding: "8px 10px", borderBottom: `1px solid ${C.grayMid}` }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {gastosPartidas
+                .map((g) => ({ g, pend: (+g.total || 0) - (paidMap[g.id] || 0) }))
+                .filter(({ pend }) => pend > 0.5)
+                .sort((a, b) => b.pend - a.pend)
+                .map(({ g, pend }) => (
+                  <tr key={g.id}>
+                    <td style={{ padding: "8px 10px", fontSize: 13, borderBottom: `1px solid ${C.grayLight}` }}>{g.c}</td>
+                    <td style={{ padding: "8px 10px", fontSize: 13, fontWeight: 600, color: C.red, borderBottom: `1px solid ${C.grayLight}`, whiteSpace: "nowrap" }}>{fmt(pend)}</td>
+                    <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.grayLight}` }}>
+                      <Input type="date" value={g.fechaPrevista || ""} onChange={(v) => actualizarPartida(g.id, { fechaPrevista: v })} style={{ width: 145 }} />
+                    </td>
+                    <td style={{ padding: "8px 10px", borderBottom: `1px solid ${C.grayLight}` }}>
+                      <Select value={g.cuentaPrevista || CUENTA_HUCHA} onChange={(v) => actualizarPartida(g.id, { cuentaPrevista: v })} options={CUENTAS_LIQUIDEZ} />
+                    </td>
+                  </tr>
+                ))}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+
+      {/* ── APORTACIONES MENSUALES ─────────────────────────────────── */}
+      <Card title="💪 Aportaciones mensuales a la hucha" style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 12, color: C.sub, marginBottom: 12 }}>
+          Cada mes hasta la boda aparece aquí con {fmt(APORTACION_MENSUAL_DEFECTO)} previstos (Iván ~{fmt(1050)} + Marga ~{fmt(700)}). Marca la casilla cuando el dinero entre de verdad: hasta entonces se cuenta como dinero futuro, no como saldo. Si un mes no vais a aportar, pon 0 en vez de dejarlo sin marcar.
+        </div>
+        {aportaciones.map((a) => (
+          <div key={a.mes} style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "8px 0", borderBottom: `1px solid ${C.grayLight}` }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 7, cursor: "pointer", minWidth: 150 }}>
+              <input
+                type="checkbox"
+                checked={!!a.confirmada}
+                onChange={(e) => actualizarAportacion(a.mes, { confirmada: e.target.checked })}
+                style={{ width: 16, height: 16, accentColor: C.teal, cursor: "pointer" }}
+              />
+              <span style={{ fontSize: 13, fontWeight: a.confirmada ? 400 : 600, color: a.confirmada ? C.sub : C.text, textTransform: "capitalize" }}>{etiquetaMes(a.mes)}</span>
+            </label>
+            <Input type="number" value={a.importe} onChange={(v) => actualizarAportacion(a.mes, { importe: v === "" ? 0 : +v })} style={{ width: 95 }} />
+            <Input type="date" value={a.fecha} onChange={(v) => actualizarAportacion(a.mes, { fecha: v })} style={{ width: 145 }} />
+            <span style={{ fontSize: 11, color: a.confirmada ? C.teal : C.amber, fontWeight: 600 }}>
+              {a.confirmada ? "✅ Ya está en la cuenta" : "🕓 Pendiente de meter"}
+            </span>
+          </div>
+        ))}
+      </Card>
+
+      {/* ── TRASPASOS ──────────────────────────────────────────────── */}
+      <Card title="🔁 Traspasos entre cuentas" style={{ marginBottom: 14 }}>
+        <div style={{ fontSize: 12, color: C.sub, marginBottom: 12 }}>
+          Cuando movéis dinero de un sitio a otro sin gastarlo — por ejemplo, ingresáis en el banco un sobre de regalo que teníais en efectivo — regístralo aquí. Así el dinero cambia de cuenta sin contarse dos veces ni desaparecer.
+        </div>
+        {nuevoTraspaso ? (
+          <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center", marginBottom: 12, padding: "12px 14px", background: C.rosePale, borderRadius: 10 }}>
+            <Select value={nuevoTraspaso.desde} onChange={(v) => setNuevoTraspaso({ ...nuevoTraspaso, desde: v })} options={CUENTAS_LIQUIDEZ} />
+            <span style={{ fontSize: 15, color: C.sub }}>→</span>
+            <Select value={nuevoTraspaso.hacia} onChange={(v) => setNuevoTraspaso({ ...nuevoTraspaso, hacia: v })} options={CUENTAS_LIQUIDEZ} />
+            <Input type="number" placeholder="€" value={nuevoTraspaso.cantidad} onChange={(v) => setNuevoTraspaso({ ...nuevoTraspaso, cantidad: v })} style={{ width: 90 }} />
+            <Input type="date" value={nuevoTraspaso.fecha} onChange={(v) => setNuevoTraspaso({ ...nuevoTraspaso, fecha: v })} style={{ width: 145 }} />
+            <Input placeholder="Concepto (opcional)" value={nuevoTraspaso.concepto} onChange={(v) => setNuevoTraspaso({ ...nuevoTraspaso, concepto: v })} style={{ flex: 1, minWidth: 140 }} />
+            <Btn small variant="primary" onClick={guardarTraspaso}>Guardar</Btn>
+            <Btn small variant="ghost" onClick={() => setNuevoTraspaso(null)}>✕</Btn>
+          </div>
+        ) : (
+          <Btn small variant="teal" onClick={abrirTraspaso} style={{ marginBottom: 12 }}>+ Registrar traspaso</Btn>
+        )}
+        {traspasos.length === 0 ? (
+          <div style={{ fontSize: 12, color: C.sub }}>Todavía no hay ningún traspaso registrado.</div>
+        ) : (
+          [...traspasos].sort((a, b) => b.fecha.localeCompare(a.fecha)).map((t) => (
+            <div key={t.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", fontSize: 12, padding: "6px 0", borderBottom: `1px solid ${C.grayLight}` }}>
+              <span>{fechaCorta(t.fecha)} · {t.desde} → {t.hacia}{t.concepto ? ` · ${t.concepto}` : ""}</span>
+              <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <strong>{fmt(t.cantidad)}</strong>
+                <Btn small variant="ghost" onClick={() => borrarTraspaso(t.id)}>🗑</Btn>
+              </span>
             </div>
-          );
-        })}
+          ))
+        )}
+      </Card>
+
+      {/* ── PRESUPUESTO (resumen) ──────────────────────────────────── */}
+      <Card title="📊 Presupuesto de la boda">
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(150px,1fr))", gap: 12, marginBottom: 14 }}>
+          <KPI label="Presupuesto total" value={fmt(totalPres)} sub={`${gastosPartidas.length} partidas`} color={C.rose} />
+          <KPI label="Ya pagado" value={fmt(totalPaid)} sub={totalPres > 0 ? `${((totalPaid / totalPres) * 100).toFixed(1)}% del total` : ""} color={C.teal} />
+          <KPI label="Pendiente" value={fmt(pendienteTotal)} color={C.red} />
+          <KPI label="Debéis a los padres" value={fmt(debePadres)} sub="Préstamo catering, ago 2026" color={C.amber} />
+          <KPI label="Regalos estimados en la boda" value={fmt(nAdultos * 180)} sub={`${nAdultos} adultos × ${fmt(180)}`} color={C.teal} />
+        </div>
+        <div style={{ height: 20, background: C.grayLight, borderRadius: 10, overflow: "hidden", display: "flex", marginBottom: 10 }}>
+          <div style={{ width: (totalPres > 0 ? (totalPaid / totalPres) * 100 : 0) + "%", background: C.teal }} title={`Pagado ${fmt(totalPaid)}`} />
+        </div>
+        <div style={{ fontSize: 11, color: C.sub }}>
+          Llevaréis pagados {fmt(totalPaid)} de {fmt(totalPres)}. El detalle partida a partida está en la pestaña Gastos; aquí solo el resumen, porque lo que decide si podéis pagar o no es la liquidez de arriba, no el presupuesto.
+        </div>
       </Card>
     </div>
   );
@@ -2938,6 +3309,10 @@ function BodaApp() {
   const [pagos, setPagosRaw] = useState(PAGOS_INIT);
   const [devoluciones, setDevolucionesRaw] = useState(DEVOLUCIONES_INIT);
   const [estimacionRegalos, setEstimacionRegalosRaw] = useState(ESTIMACION_REGALOS_INIT);
+  // Liquidez: saldos cuadrados a mano, traspasos entre cuentas y aportaciones mensuales previstas
+  const [cuadres, setCuadresRaw] = useState(CUADRES_INIT);
+  const [traspasos, setTraspasosRaw] = useState(TRASPASOS_INIT);
+  const [aportaciones, setAportacionesRaw] = useState(() => mergeAportacionesConMeses(APORTACIONES_INIT));
   const [tablesConfig, setTablesConfigRaw] = useState(MESAS_CONFIG_INIT);
   const [mesasEliminadas, setMesasEliminadasRaw] = useState([]); // nº de mesas que borraste tú a mano, para no revivirlas
   const [elementos, setElementosRaw] = useState(ELEMENTOS_INIT);
@@ -3020,6 +3395,12 @@ function BodaApp() {
         if (mergedPagos !== st.pagos) setPagosRaw(mergedPagos);
         if (st.devoluciones) setDevolucionesRaw(st.devoluciones);
         if (st.estimacionRegalos) setEstimacionRegalosRaw({ ...ESTIMACION_REGALOS_INIT, ...st.estimacionRegalos });
+        if (st.cuadres) setCuadresRaw(st.cuadres);
+        if (st.traspasos) setTraspasosRaw(st.traspasos);
+        // Las aportaciones se completan siempre con los meses que falten hasta la boda, sin tocar las
+        // que ya tuvieras confirmadas o con importe cambiado.
+        const mergedAportaciones = mergeAportacionesConMeses(st.aportaciones || []);
+        setAportacionesRaw(mergedAportaciones);
         const mesasEliminadasGuardadas = st.mesasEliminadas || [];
         setMesasEliminadasRaw(mesasEliminadasGuardadas);
         let mergedTablesConfig = st.tablesConfig;
@@ -3062,6 +3443,7 @@ function BodaApp() {
             (mergedRevisar && JSON.stringify(mergedRevisar) !== JSON.stringify(st.revisar)) ||
             (mergedTablesConfig && JSON.stringify(mergedTablesConfig) !== JSON.stringify(st.tablesConfig)) ||
             (mergedElementos && JSON.stringify(mergedElementos) !== JSON.stringify(st.elementos || null)) ||
+            JSON.stringify(mergedAportaciones) !== JSON.stringify(st.aportaciones || []) ||
             st.movimientos) {
           persist({
             ...st,
@@ -3070,6 +3452,9 @@ function BodaApp() {
             pagos: mergedPagos,
             devoluciones: st.devoluciones || devoluciones,
             estimacionRegalos: st.estimacionRegalos || estimacionRegalos,
+            cuadres: st.cuadres || cuadres,
+            traspasos: st.traspasos || traspasos,
+            aportaciones: mergedAportaciones,
             movimientos: undefined,
             elementos: mergedElementos || st.elementos || elementos,
             familias: mergedFamilias || st.familias || familias,
@@ -3093,13 +3478,16 @@ function BodaApp() {
     if (ok) setTimeout(() => setSaveStatus("idle"), 1800);
   }, []);
 
-  const snapshot = (over = {}) => ({ gastos, guests, pagos, devoluciones, estimacionRegalos, tablesConfig, mesasEliminadas, elementos, familias, bebidas, canciones, revisar, ...over });
+  const snapshot = (over = {}) => ({ gastos, guests, pagos, devoluciones, estimacionRegalos, cuadres, traspasos, aportaciones, tablesConfig, mesasEliminadas, elementos, familias, bebidas, canciones, revisar, ...over });
 
   const setGastos = (g) => { setGastosRaw(g); persist(snapshot({ gastos: g })); };
   const setGuests = (gu) => { setGuestsRaw(gu); persist(snapshot({ guests: gu })); };
   const setPagos = (p) => { setPagosRaw(p); persist(snapshot({ pagos: p })); };
   const setDevoluciones = (d) => { setDevolucionesRaw(d); persist(snapshot({ devoluciones: d })); };
   const setEstimacionRegalos = (e) => { setEstimacionRegalosRaw(e); persist(snapshot({ estimacionRegalos: e })); };
+  const setCuadres = (c) => { setCuadresRaw(c); persist(snapshot({ cuadres: c })); };
+  const setTraspasos = (t) => { setTraspasosRaw(t); persist(snapshot({ traspasos: t })); };
+  const setAportaciones = (a) => { setAportacionesRaw(a); persist(snapshot({ aportaciones: a })); };
   const setTablesConfig = (tc) => { setTablesConfigRaw(tc); persist(snapshot({ tablesConfig: tc })); };
   // Borra una mesa Y recuerda para siempre que la borraste (en el mismo guardado, para no perder el
   // dato si el navegador recarga justo entre medias). Así no vuelve a aparecer en el próximo reload.
@@ -3123,6 +3511,10 @@ function BodaApp() {
     setPagosRaw(PAGOS_INIT);
     setDevolucionesRaw(DEVOLUCIONES_INIT);
     setEstimacionRegalosRaw(ESTIMACION_REGALOS_INIT);
+    setCuadresRaw(CUADRES_INIT);
+    setTraspasosRaw(TRASPASOS_INIT);
+    const aportacionesReset = mergeAportacionesConMeses(APORTACIONES_INIT);
+    setAportacionesRaw(aportacionesReset);
     setTablesConfigRaw(MESAS_CONFIG_INIT);
     setMesasEliminadasRaw([]);
     setElementosRaw(ELEMENTOS_INIT);
@@ -3130,7 +3522,7 @@ function BodaApp() {
     setBebidasRaw(BEBIDAS_INIT);
     setCancionesRaw(CANCIONES_INIT);
     setRevisarRaw(REVISAR_INIT);
-    persist({ gastos: GASTOS_INIT, guests: GUESTS_INIT, pagos: PAGOS_INIT, devoluciones: DEVOLUCIONES_INIT, estimacionRegalos: ESTIMACION_REGALOS_INIT, tablesConfig: MESAS_CONFIG_INIT, mesasEliminadas: [], elementos: ELEMENTOS_INIT, familias: FAMILIAS_INIT, bebidas: BEBIDAS_INIT, canciones: CANCIONES_INIT, revisar: REVISAR_INIT });
+    persist({ gastos: GASTOS_INIT, guests: GUESTS_INIT, pagos: PAGOS_INIT, devoluciones: DEVOLUCIONES_INIT, estimacionRegalos: ESTIMACION_REGALOS_INIT, cuadres: CUADRES_INIT, traspasos: TRASPASOS_INIT, aportaciones: aportacionesReset, tablesConfig: MESAS_CONFIG_INIT, mesasEliminadas: [], elementos: ELEMENTOS_INIT, familias: FAMILIAS_INIT, bebidas: BEBIDAS_INIT, canciones: CANCIONES_INIT, revisar: REVISAR_INIT });
   };
 
   // Recarga los datos guardados (útil si tu pareja ha hecho cambios desde su móvil)
@@ -3158,6 +3550,9 @@ function BodaApp() {
       if (st.pagos || st.movimientos || fusionMago.cambiado) setPagosRaw(nuevosPagos);
       if (st.devoluciones) setDevolucionesRaw(st.devoluciones);
       if (st.estimacionRegalos) setEstimacionRegalosRaw({ ...ESTIMACION_REGALOS_INIT, ...st.estimacionRegalos });
+      if (st.cuadres) setCuadresRaw(st.cuadres);
+      if (st.traspasos) setTraspasosRaw(st.traspasos);
+      if (st.aportaciones) setAportacionesRaw(mergeAportacionesConMeses(st.aportaciones));
       const mesasEliminadasActuales = st.mesasEliminadas || mesasEliminadas;
       if (st.mesasEliminadas) setMesasEliminadasRaw(st.mesasEliminadas);
       if (st.tablesConfig) setTablesConfigRaw(mergeTablesConfigWithLatest(st.tablesConfig, mesasEliminadasActuales));
@@ -3286,7 +3681,7 @@ function BodaApp() {
             Cambios guardados automáticamente · Boda octubre 2026
           </p>
         </div>
-        {tab === "finanzas" && <TabFinanzas gastos={gastos} guests={guests} pagos={pagos} devoluciones={devoluciones} />}
+        {tab === "finanzas" && <TabFinanzas gastos={gastos} setGastos={setGastos} guests={guests} pagos={pagos} devoluciones={devoluciones} estimacionRegalos={estimacionRegalos} cuadres={cuadres} setCuadres={setCuadres} traspasos={traspasos} setTraspasos={setTraspasos} aportaciones={aportaciones} setAportaciones={setAportaciones} />}
         {tab === "gastos" && <TabGastos gastos={gastos} setGastos={setGastos} pagos={pagos} setPagos={setPagos} devoluciones={devoluciones} setDevoluciones={setDevoluciones} guests={guests} familias={familias} estimacionRegalos={estimacionRegalos} setEstimacionRegalos={setEstimacionRegalos} />}
         {tab === "invitados" && <TabInvitados guests={guests} setGuests={setGuests} familias={familias} setFamilias={setFamilias} pagos={pagos} gastos={gastos} />}
         {tab === "mesas" && <TabMesas guests={guests} setGuests={setGuests} tablesConfig={tablesConfig} setTablesConfig={setTablesConfig} deleteMesa={deleteMesa} elementos={elementos} setElementos={setElementos} familias={familias} />}

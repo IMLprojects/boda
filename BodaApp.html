@@ -46,63 +46,77 @@
     }
     .boda-bottom-nav button .boda-nav-icon { font-size: 21px; line-height: 1; }
 
-    /* ── TABLAS → TARJETAS ───────────────────────────────────────────────────────────────
-       Antes las tablas se deslizaban en horizontal dentro de su tarjeta. En un móvil eso no
-       funcionaba: la tabla de partidas mide 628px en una pantalla de 348px útiles, así que se
-       ocultaba el 45% — y lo oculto eran justo la columna "Pendiente" y los botones de editar y
-       borrar. Peor aún, al desplegar una partida quedaban dos zonas deslizables una dentro de otra,
-       y el formulario de "nuevo pago" vivía DENTRO de la zona desplazada, de modo que al abrirlo
-       sus primeros campos quedaban fuera de la pantalla y se rellenaba a ciegas.
-       Ahora, en pantallas estrechas, cada fila se convierte en una tarjeta: las celdas se apilan y
-       cada una enseña delante el nombre de su columna (sale de su atributo data-label). Así no hay
-       que deslizar nada en horizontal en toda la app. En el ordenador la tabla se queda igual. */
+    /* ── TABLAS → FILAS COMPACTAS ────────────────────────────────────────────────────────
+       En el móvil una tabla ancha no cabe: la de partidas mide 628px en una pantalla de 348px
+       útiles. Pero apilar TODAS las celdas de cada fila tampoco vale — cambia el desplazamiento
+       lateral por uno vertical interminable (16 partidas × 6 datos = casi 100 líneas para ver lo
+       que antes cabía de un vistazo).
+       La solución es enseñar en cada fila SOLO lo que de verdad importa, en una sola línea: el
+       nombre a la izquierda y la cifra clave a la derecha. El resto de columnas se ocultan; se ven
+       al pulsar el lápiz, que abre la fila con todos sus campos. Las celdas que se quedan llevan el
+       atributo data-movil; las demás desaparecen. */
     .boda-scroll-x { overflow-x: visible !important; }
 
     table.boda-tarjetas { min-width: 0 !important; width: 100% !important; }
     table.boda-tarjetas thead { display: none; }
-    table.boda-tarjetas, table.boda-tarjetas tbody, table.boda-tarjetas tr, table.boda-tarjetas td {
-      display: block; width: 100%;
+    table.boda-tarjetas, table.boda-tarjetas tbody { display: block; width: 100%; }
+
+    /* Cada fila, una línea */
+    table.boda-tarjetas tbody tr {
+      display: flex; align-items: center; gap: 2px;
+      /* nowrap a propósito: si se permitiera envolver, un concepto largo ocuparía toda la línea y
+         empujaría el importe y los botones a una segunda, que es justo lo que queremos evitar.
+         Así el texto se encoge (y se corta a dos líneas) y la cifra nunca se cae de sitio. */
+      flex-wrap: nowrap;
+      width: 100%; border-bottom: 1px solid rgba(0,0,0,.08);
     }
-    table.boda-tarjetas tr {
-      border: 1px solid rgba(0,0,0,.09); border-radius: 12px;
-      margin: 0 0 10px; padding: 4px 0; background: #FFFFFF;
+    table.boda-tarjetas tbody td { display: none; } /* por defecto, fuera */
+    table.boda-tarjetas tbody td[data-principal],
+    table.boda-tarjetas tbody td[data-movil],
+    table.boda-tarjetas tbody td[data-acciones] { display: flex; align-items: center; }
+
+    table.boda-tarjetas tbody td[data-principal] {
+      flex: 1 1 auto; min-width: 0;
+      padding: 11px 4px 11px 10px !important; border-bottom: none !important;
+      font-size: 14px !important; font-weight: 600;
+      /* Un concepto muy largo se corta a dos líneas en vez de estirar la fila entera */
+      display: -webkit-box !important; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+      overflow: hidden; line-height: 1.25;
     }
-    table.boda-tarjetas td {
-      display: flex; align-items: center; justify-content: space-between; gap: 14px;
-      padding: 8px 13px !important; border-bottom: none !important;
-      min-width: 0 !important; text-align: right;
+    table.boda-tarjetas tbody td[data-movil] {
+      flex: 0 0 auto; justify-content: flex-end;
+      padding: 11px 6px !important; border-bottom: none !important;
+      font-size: 14px !important; white-space: nowrap;
     }
-    /* El nombre de la columna, delante de cada valor */
-    table.boda-tarjetas td[data-label]::before {
-      content: attr(data-label);
-      flex: 0 0 auto; text-align: left;
-      font-size: 10.5px; font-weight: 700; letter-spacing: .4px; text-transform: uppercase;
-      color: #6B6965;
+    table.boda-tarjetas tbody td[data-acciones] {
+      flex: 0 0 auto; gap: 2px;
+      padding: 6px 8px 6px 2px !important; border-bottom: none !important;
     }
-    /* Celdas marcadas como principales: el concepto de la fila, a lo ancho y en grande */
-    table.boda-tarjetas td[data-principal] {
-      justify-content: flex-start; text-align: left;
-      font-size: 15px !important; font-weight: 600;
-      padding-top: 11px !important; padding-bottom: 9px !important;
-      border-bottom: 1px solid rgba(0,0,0,.07) !important;
+    table.boda-tarjetas tbody td[data-acciones] button { padding: 7px 9px !important; font-size: 14px !important; }
+    table.boda-tarjetas tbody td::before { content: none; } /* sin etiquetas: la fila ya se entiende */
+
+    /* La fila en EDICIÓN sí enseña todo, apilado y a lo ancho, para poder rellenarla */
+    table.boda-tarjetas tbody tr.boda-fila-edicion { display: block; padding: 8px 0; }
+    table.boda-tarjetas tbody tr.boda-fila-edicion td { display: block !important; padding: 5px 10px !important; }
+    table.boda-tarjetas tbody tr.boda-fila-edicion td::before {
+      content: attr(data-label); display: block; margin-bottom: 3px;
+      font-size: 10.5px; font-weight: 700; letter-spacing: .4px; text-transform: uppercase; color: #6B6965;
     }
-    /* Celdas vacías (rellenos de las filas de totales): no ocupan sitio */
-    table.boda-tarjetas td:empty { display: none; }
-    /* La barra de progreso no aporta nada en móvil: lo mismo que ya dicen "Pagado" y "Pendiente",
-       pero ocupando una línea en cada tarjeta. Con 16 partidas son 16 líneas de scroll de más. */
-    table.boda-tarjetas td[data-label="Progreso"] { display: none; }
-    /* La fila desplegada con los pagos de una partida no es una tarjeta, es contenido anidado.
-       OJO con el combinador ">": sin él estas reglas se colaban dentro de la tabla de pagos que va
-       ANIDADA en esa fila y le anulaban las etiquetas de columna a todas sus celdas. */
-    table.boda-tarjetas tr.boda-fila-anidada { border: none; padding: 0; margin: 0 0 10px; background: none; }
-    table.boda-tarjetas tr.boda-fila-anidada > td { padding: 0 !important; display: block; }
-    table.boda-tarjetas tr.boda-fila-anidada > td::before { content: none; }
-    /* Fila de totales: se distingue del resto */
-    table.boda-tarjetas tr.boda-fila-total { background: #F2F0EC; border-color: rgba(0,0,0,.15); }
-    /* Botones de acción: tamaño de dedo y a lo ancho */
-    table.boda-tarjetas td[data-acciones] { justify-content: stretch; gap: 8px; padding-top: 10px !important; }
-    table.boda-tarjetas td[data-acciones]::before { content: none; }
-    table.boda-tarjetas td[data-acciones] button { flex: 1; padding: 10px 12px !important; font-size: 13px !important; }
+    table.boda-tarjetas tbody tr.boda-fila-edicion input,
+    table.boda-tarjetas tbody tr.boda-fila-edicion select { width: 100% !important; font-size: 16px !important; }
+    table.boda-tarjetas tbody tr.boda-fila-edicion td[data-acciones] { display: flex !important; gap: 8px; }
+    table.boda-tarjetas tbody tr.boda-fila-edicion td[data-acciones]::before { content: none; }
+    table.boda-tarjetas tbody tr.boda-fila-edicion td[data-acciones] button { flex: 1; padding: 11px !important; }
+
+    /* La fila desplegada con los pagos de una partida: contenedor, no fila */
+    table.boda-tarjetas tbody tr.boda-fila-anidada { display: block; border-bottom: none; }
+    table.boda-tarjetas tbody tr.boda-fila-anidada > td { display: block !important; padding: 0 !important; }
+
+    /* Fila de totales */
+    table.boda-tarjetas tbody tr.boda-fila-total { background: #F2F0EC; font-weight: 700; }
+
+    /* Texto que solo tiene sentido en pantalla grande (etiquetas largas de botones) */
+    .boda-solo-escritorio { display: none !important; }
 
     /* ── FORMULARIOS DE ALTA ──────────────────────────────────────────────────────────────
        Los campos dejan de ir en una fila apretada y pasan a ocupar todo el ancho, uno debajo de
@@ -1849,11 +1863,11 @@ function TabFinanzas({ gastos, setGastos, guests, pagos, devoluciones, estimacio
                   <td data-principal="" style={{ padding: "9px 12px", fontSize: 12, color: C.sub, borderBottom: `1px solid ${C.grayLight}` }}>Hoy · punto de partida</td>
                   <td style={{ padding: "9px 12px", fontSize: 12, color: C.sub, borderBottom: `1px solid ${C.grayLight}` }} colSpan={3} data-label="Concepto">Saldos cuadrados</td>
                   <td style={{ borderBottom: `1px solid ${C.grayLight}` }} />
-                  <td data-label="Saldo total" style={{ padding: "9px 12px", fontSize: 13, fontWeight: 700, borderBottom: `1px solid ${C.grayLight}` }}>{fmt(disponibleHoy)}</td>
+                  <td data-label="Saldo total" data-movil="" style={{ padding: "9px 12px", fontSize: 13, fontWeight: 700, borderBottom: `1px solid ${C.grayLight}` }}>{fmt(disponibleHoy)}</td>
                 </tr>
                 {calendario.map((f) => (
                   <tr key={f.id} style={{ background: f.saldoTotal < -0.5 ? C.redLight : "transparent" }}>
-                    <td data-label="Fecha" style={{ padding: "9px 12px", fontSize: 12, borderBottom: `1px solid ${C.grayLight}`, whiteSpace: "nowrap", color: f.atrasado ? C.amber : C.text, fontWeight: f.atrasado ? 700 : 400 }}>
+                    <td data-label="Fecha" data-movil="" style={{ padding: "9px 12px", fontSize: 12, borderBottom: `1px solid ${C.grayLight}`, whiteSpace: "nowrap", color: f.atrasado ? C.amber : C.text, fontWeight: f.atrasado ? 700 : 400 }}>
                       {f.atrasado ? "⚠️ " : ""}{fechaCorta(f.fecha)}
                     </td>
                     <td data-principal="" style={{ padding: "9px 12px", fontSize: 13, borderBottom: `1px solid ${C.grayLight}` }}>
@@ -1862,7 +1876,7 @@ function TabFinanzas({ gastos, setGastos, guests, pagos, devoluciones, estimacio
                       {f.detalle && <div style={{ fontSize: 10, color: C.sub }}>{f.detalle}</div>}
                     </td>
                     <td data-label="Cuenta" style={{ padding: "9px 12px", fontSize: 12, color: C.sub, borderBottom: `1px solid ${C.grayLight}`, whiteSpace: "nowrap" }}>{f.cuenta}</td>
-                    <td data-label="Importe" style={{ padding: "9px 12px", fontSize: 13, fontWeight: 600, color: f.importe < 0 ? C.red : C.teal, borderBottom: `1px solid ${C.grayLight}`, whiteSpace: "nowrap" }}>
+                    <td data-label="Importe" data-movil="" style={{ padding: "9px 12px", fontSize: 13, fontWeight: 600, color: f.importe < 0 ? C.red : C.teal, borderBottom: `1px solid ${C.grayLight}`, whiteSpace: "nowrap" }}>
                       {f.importe < 0 ? "−" : "+"}{fmt(Math.abs(f.importe))}
                     </td>
                     <td data-label="Saldo cuenta" style={{ padding: "9px 12px", fontSize: 12, color: f.negativo ? C.red : C.sub, borderBottom: `1px solid ${C.grayLight}`, fontWeight: f.negativo ? 700 : 400 }}>{fmt(f.saldoCuenta)}</td>
@@ -1924,8 +1938,8 @@ function TabFinanzas({ gastos, setGastos, guests, pagos, devoluciones, estimacio
                 .map(({ g, pend }) => (
                   <tr key={g.id}>
                     <td data-principal="" style={{ padding: "8px 10px", fontSize: 13, borderBottom: `1px solid ${C.grayLight}` }}>{g.c}</td>
-                    <td data-label="Pendiente" style={{ padding: "8px 10px", fontSize: 13, fontWeight: 600, color: C.red, borderBottom: `1px solid ${C.grayLight}`, whiteSpace: "nowrap" }}>{fmt(pend)}</td>
-                    <td data-label="Fecha prevista" style={{ padding: "8px 10px", borderBottom: `1px solid ${C.grayLight}` }}>
+                    <td data-label="Pendiente" data-movil="" style={{ padding: "8px 10px", fontSize: 13, fontWeight: 600, color: C.red, borderBottom: `1px solid ${C.grayLight}`, whiteSpace: "nowrap" }}>{fmt(pend)}</td>
+                    <td data-label="Fecha prevista" data-movil="" style={{ padding: "8px 10px", borderBottom: `1px solid ${C.grayLight}` }}>
                       <Input type="date" value={g.fechaPrevista || ""} onChange={(v) => actualizarPartida(g.id, { fechaPrevista: v })} style={{ width: 145 }} />
                     </td>
                     <td data-label="Sale de" style={{ padding: "8px 10px", borderBottom: `1px solid ${C.grayLight}` }}>
@@ -2154,7 +2168,7 @@ function PagosDePartida({ gasto, pagos, setPagos, deletePago, guests, familias }
                   const isEd = editP === p.id;
                   if (isEd) {
                     return (
-                      <tr key={p.id} style={{ background: C.rosePale }}>
+                      <tr key={p.id} className="boda-fila-edicion" style={{ background: C.rosePale }}>
                         <td data-label="Concepto" style={{ padding: "6px 10px" }}><Input value={draftP.concepto} onChange={(v) => setDraftP({ ...draftP, concepto: v })} style={{ width: 140 }} /></td>
                         <td data-label="Cantidad" style={{ padding: "6px 10px" }}><Input type="number" value={draftP.cantidad} onChange={(v) => setDraftP({ ...draftP, cantidad: v })} style={{ width: 80 }} /></td>
                         <td data-label="Fecha" style={{ padding: "6px 10px" }}><Input type="date" value={draftP.fecha} onChange={(v) => setDraftP({ ...draftP, fecha: v })} style={{ width: 130 }} /></td>
@@ -2182,9 +2196,9 @@ function PagosDePartida({ gasto, pagos, setPagos, deletePago, guests, familias }
                     <tr key={p.id} style={esPlanificado ? { background: C.amberLight } : undefined}>
                       <td data-principal="" style={{ padding: "8px 10px", borderBottom: `1px solid ${C.grayMid}`, fontWeight: 500, fontSize: 12 }}>
                         {p.concepto}
-                        {p.comentario && <div style={{ fontSize: 10, color: C.sub }}>{p.comentario}</div>}
+                        {p.comentario && <div className="boda-solo-escritorio" style={{ fontSize: 10, color: C.sub }}>{p.comentario}</div>}
                       </td>
-                      <td data-label="Cantidad" style={{ padding: "8px 10px", borderBottom: `1px solid ${C.grayMid}`, fontSize: 12, fontWeight: 600 }}>{fmt(p.cantidad)}</td>
+                      <td data-label="Cantidad" data-movil="" style={{ padding: "8px 10px", borderBottom: `1px solid ${C.grayMid}`, fontSize: 12, fontWeight: 600 }}>{fmt(p.cantidad)}</td>
                       <td data-label="Fecha" style={{ padding: "8px 10px", borderBottom: `1px solid ${C.grayMid}`, fontSize: 12, color: C.sub }}>{fmtFecha(p.fecha)}</td>
                       <td data-label="Método" style={{ padding: "8px 10px", borderBottom: `1px solid ${C.grayMid}`, fontSize: 12 }}>{p.metodo}</td>
                       <td data-label="Cuenta" style={{ padding: "8px 10px", borderBottom: `1px solid ${C.grayMid}`, fontSize: 12 }}>{p.cuenta}</td>
@@ -2298,13 +2312,13 @@ function TabGastos({ gastos, setGastos, deleteGasto, deletePago, pagos, setPagos
             {g.c}
             {nPagos > 0 && <span style={{ fontSize: 10, color: C.sub, marginLeft: 6 }}>· {nPagos} pago{nPagos > 1 ? "s" : ""}</span>}
           </td>
-          <td data-label={esIngreso ? "Objetivo" : "Total"} style={{ padding: "10px 12px", borderBottom: `1px solid ${C.grayLight}`, fontSize: 13, fontWeight: 600 }}>
+          <td data-label={esIngreso ? "Objetivo" : "Total"} data-movil={isEd ? "" : undefined} style={{ padding: "10px 12px", borderBottom: `1px solid ${C.grayLight}`, fontSize: 13, fontWeight: 600 }}>
             {isEd ? <Input type="number" value={draft.total} onChange={(v) => setDraft({ ...draft, total: v })} style={{ width: 90 }} /> : (g.total > 0 ? fmt(g.total) : (esIngreso ? "—" : fmt(0)))}
           </td>
-          <td data-label={esIngreso ? "Recibido" : "Pagado"} style={{ padding: "10px 12px", borderBottom: `1px solid ${C.grayLight}`, fontSize: 13, color: C.teal, fontWeight: 500 }}>
+          <td data-label={esIngreso ? "Recibido" : "Pagado"} data-movil={esIngreso ? "" : undefined} style={{ padding: "10px 12px", borderBottom: `1px solid ${C.grayLight}`, fontSize: 13, color: C.teal, fontWeight: 500 }}>
             {fmt(paid)}
           </td>
-          <td data-label="Pendiente" style={{ padding: "10px 12px", borderBottom: `1px solid ${C.grayLight}`, fontSize: 13, color: pend > 0 ? C.red : C.green }}>
+          <td data-label="Pendiente" data-movil={esIngreso ? undefined : ""} style={{ padding: "10px 12px", borderBottom: `1px solid ${C.grayLight}`, fontSize: 13, color: pend > 0 ? C.red : C.green }}>
             {g.total <= 0 ? "—" : (pend > 0.5 ? fmt(pend) : "✓ Completo")}
           </td>
           <td data-label="Progreso" style={{ padding: "10px 12px", borderBottom: `1px solid ${C.grayLight}`, minWidth: 110 }}>
@@ -2322,7 +2336,7 @@ function TabGastos({ gastos, setGastos, deleteGasto, deletePago, pagos, setPagos
               </>
             ) : (
               <>
-                <Btn small onClick={() => startEdit(g)} style={{ marginRight: 4 }}>✏️ Total</Btn>
+                <Btn small onClick={() => startEdit(g)} style={{ marginRight: 4 }}>✏️<span className="boda-solo-escritorio"> Total</span></Btn>
                 <Btn small variant="danger" onClick={() => removeG(g.id)}>🗑</Btn>
               </>
             )}
@@ -2405,7 +2419,7 @@ function TabGastos({ gastos, setGastos, deleteGasto, deletePago, pagos, setPagos
                 <td data-principal="" style={{ padding: "12px", fontWeight: 700, background: C.grayLight }}>TOTAL</td>
                 <td data-label="Presupuesto" style={{ padding: "12px", fontWeight: 700, background: C.grayLight }}>{fmt(totalT)}</td>
                 <td data-label="Pagado" style={{ padding: "12px", fontWeight: 700, background: C.grayLight, color: C.teal }}>{fmt(totalP)}</td>
-                <td data-label="Pendiente" style={{ padding: "12px", fontWeight: 700, background: C.grayLight, color: C.red }}>{fmt(totalT - totalP)}</td>
+                <td data-label="Pendiente" data-movil="" style={{ padding: "12px", fontWeight: 700, background: C.grayLight, color: C.red }}>{fmt(totalT - totalP)}</td>
                 <td colSpan={2} style={{ background: C.grayLight }}></td>
               </tr>
             </tbody>
@@ -2429,7 +2443,7 @@ function TabGastos({ gastos, setGastos, deleteGasto, deletePago, pagos, setPagos
                 <tr className="boda-fila-total">
                   <td data-principal="" style={{ padding: "12px", fontWeight: 700, background: C.grayLight }}>TOTAL RECIBIDO</td>
                   <td style={{ background: C.grayLight }} />
-                  <td data-label="Recibido" style={{ padding: "12px", fontWeight: 700, background: C.grayLight, color: C.teal }}>{fmt(totalIngresos)}</td>
+                  <td data-label="Recibido" data-movil="" style={{ padding: "12px", fontWeight: 700, background: C.grayLight, color: C.teal }}>{fmt(totalIngresos)}</td>
                   <td colSpan={3} style={{ background: C.grayLight }} />
                 </tr>
               </tbody>
@@ -2897,7 +2911,7 @@ function TabInvitados({ guests, setGuests, familias, setFamilias, pagos, gastos 
                 const isEd = editing === g.id;
                 if (isEd) {
                   return (
-                    <tr key={g.id} style={{ background: C.rosePale }}>
+                    <tr key={g.id} className="boda-fila-edicion" style={{ background: C.rosePale }}>
                       <td data-label="Nombre" style={{ padding: "8px 12px" }}><Input value={draft.n} onChange={(v) => setDraft({ ...draft, n: v })} style={{ width: 130 }} /></td>
                       <td data-label="Sexo" style={{ padding: "8px 12px" }}><Select value={draft.sex} onChange={(v) => setDraft({ ...draft, sex: v })} options={["Mujer", "Hombre"]} /></td>
                       <td data-label="Mesa" style={{ padding: "8px 12px" }}><Input type="number" value={draft.mesa} onChange={(v) => setDraft({ ...draft, mesa: v })} style={{ width: 60 }} /></td>
@@ -2947,7 +2961,7 @@ function TabInvitados({ guests, setGuests, familias, setFamilias, pagos, gastos 
                     <td data-label="Despedida" style={{ padding: "9px 12px", borderBottom: `1px solid ${C.grayLight}` }}>
                       <Badge color={g.desp === "Marga" ? "rose" : g.desp === "Iván" ? "blue" : "gray"}>{g.desp}</Badge>
                     </td>
-                    <td data-label="Confirma" style={{ padding: "9px 12px", borderBottom: `1px solid ${C.grayLight}`, whiteSpace: "nowrap" }}>
+                    <td data-label="Confirma" data-movil="" style={{ padding: "9px 12px", borderBottom: `1px solid ${C.grayLight}`, whiteSpace: "nowrap" }}>
                       <span style={{ display: "inline-flex", gap: 3, alignItems: "center" }}>
                         <button onClick={() => setConf(g.id, "Si")} title="Confirmar" style={{ cursor: "pointer", border: "none", borderRadius: 6, width: 24, height: 24, fontSize: 12, background: g.confirmado === "Si" ? C.green : C.grayLight, color: g.confirmado === "Si" ? "#fff" : C.sub }}>✓</button>
                         <button onClick={() => setConf(g.id, "No")} title="No viene" style={{ cursor: "pointer", border: "none", borderRadius: 6, width: 24, height: 24, fontSize: 12, background: g.confirmado === "No" ? C.red : C.grayLight, color: g.confirmado === "No" ? "#fff" : C.sub }}>✕</button>
@@ -3475,7 +3489,7 @@ function TabCuestionario({ bebidas, setBebidas, canciones, setCanciones, revisar
                     const isEd = editB === b.id;
                     if (isEd) {
                       return (
-                        <tr key={b.id} style={{ background: C.rosePale }}>
+                        <tr key={b.id} className="boda-fila-edicion" style={{ background: C.rosePale }}>
                           <td data-label="Bebida" style={{ padding: "8px 12px" }}><Input value={draftB.bebida} onChange={(v) => setDraftB({ ...draftB, bebida: v })} style={{ width: 160 }} /></td>
                           <td data-label="Menciones" style={{ padding: "8px 12px" }}><Input type="number" value={draftB.menciones} onChange={(v) => setDraftB({ ...draftB, menciones: v })} style={{ width: 80 }} /></td>
                           <td data-label="Quién la pidió" style={{ padding: "8px 12px" }}><Input value={draftB.quien} onChange={(v) => setDraftB({ ...draftB, quien: v })} style={{ width: "100%" }} /></td>
@@ -3489,7 +3503,7 @@ function TabCuestionario({ bebidas, setBebidas, canciones, setCanciones, revisar
                     return (
                       <tr key={b.id}>
                         <td data-principal="" style={{ padding: "10px 12px", borderBottom: `1px solid ${C.grayLight}`, fontWeight: 500, fontSize: 13 }}>{b.bebida}</td>
-                        <td data-label="Menciones" style={{ padding: "10px 12px", borderBottom: `1px solid ${C.grayLight}` }}><Badge color="teal">{b.menciones}</Badge></td>
+                        <td data-label="Menciones" data-movil="" style={{ padding: "10px 12px", borderBottom: `1px solid ${C.grayLight}` }}><Badge color="teal">{b.menciones}</Badge></td>
                         <td data-label="Quién la pidió" style={{ padding: "10px 12px", borderBottom: `1px solid ${C.grayLight}`, fontSize: 12, color: C.sub }}>{b.quien}</td>
                         <td data-acciones="" style={{ padding: "10px 12px", borderBottom: `1px solid ${C.grayLight}`, whiteSpace: "nowrap" }}>
                           <Btn small variant="ghost" onClick={() => { setEditB(b.id); setDraftB({ ...b }); }} style={{ marginRight: 2 }}>✏️</Btn>
@@ -3541,7 +3555,7 @@ function TabCuestionario({ bebidas, setBebidas, canciones, setCanciones, revisar
                     const isEd = editC === c.id;
                     if (isEd) {
                       return (
-                        <tr key={c.id} style={{ background: C.rosePale }}>
+                        <tr key={c.id} className="boda-fila-edicion" style={{ background: C.rosePale }}>
                           <td data-label="Canción" style={{ padding: "8px 12px" }}><Input value={draftC.cancion} onChange={(v) => setDraftC({ ...draftC, cancion: v })} style={{ width: 180 }} /></td>
                           <td data-label="Artista" style={{ padding: "8px 12px" }}><Input value={draftC.artista} onChange={(v) => setDraftC({ ...draftC, artista: v })} style={{ width: 140 }} /></td>
                           <td data-label="Pedida por" style={{ padding: "8px 12px" }}><Input value={draftC.quien} onChange={(v) => setDraftC({ ...draftC, quien: v })} style={{ width: 140 }} /></td>
@@ -3555,7 +3569,7 @@ function TabCuestionario({ bebidas, setBebidas, canciones, setCanciones, revisar
                     return (
                       <tr key={c.id}>
                         <td data-principal="" style={{ padding: "9px 12px", borderBottom: `1px solid ${C.grayLight}`, fontWeight: 500, fontSize: 13 }}>{c.cancion}</td>
-                        <td data-label="Artista" style={{ padding: "9px 12px", borderBottom: `1px solid ${C.grayLight}`, fontSize: 12, color: c.artista?.toLowerCase().includes("sin confirmar") || c.artista?.toLowerCase().includes("no identificado") ? C.amber : C.sub }}>{c.artista || "—"}</td>
+                        <td data-label="Artista" data-movil="" style={{ padding: "9px 12px", borderBottom: `1px solid ${C.grayLight}`, fontSize: 12, color: c.artista?.toLowerCase().includes("sin confirmar") || c.artista?.toLowerCase().includes("no identificado") ? C.amber : C.sub }}>{c.artista || "—"}</td>
                         <td data-label="Pedida por" style={{ padding: "9px 12px", borderBottom: `1px solid ${C.grayLight}`, fontSize: 12, color: C.sub }}>{c.quien}</td>
                         <td data-acciones="" style={{ padding: "9px 12px", borderBottom: `1px solid ${C.grayLight}`, whiteSpace: "nowrap" }}>
                           <Btn small variant="ghost" onClick={() => { setEditC(c.id); setDraftC({ ...c }); }} style={{ marginRight: 2 }}>✏️</Btn>

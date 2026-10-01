@@ -111,7 +111,12 @@
   };
 
   window.storage = {
+    // Se pone a true cuando no se ha podido hablar con la hoja de Google en la última lectura. La app lo
+    // consulta para entrar en "modo seguro": si no hemos podido leer, puede que SÍ existan datos
+    // guardados que no estamos viendo, y escribir encima los borraría.
+    lecturaRemotaFallo: false,
     get: async (key) => {
+      window.storage.lecturaRemotaFallo = false;
       const local = localStorage.getItem(key);
       try {
         const res = await fetch(BODA_REMOTE_URL, { method: "GET", cache: "no-store" });
@@ -146,6 +151,7 @@
         return { value: text };
       } catch (e) {
         console.error("No se pudo leer de Google Sheets, uso la copia local de respaldo", e);
+        window.storage.lecturaRemotaFallo = true;
         return { value: local };
       }
     },
@@ -613,6 +619,38 @@ function regalosPorInvitado(guests, pagos, gastos) {
   return map;
 }
 
+// Cuántos invitados confirmados han hecho ya su regalo y cuántos faltan todavía. Como los regalos se
+// tipifican por familia, regalosPorInvitado() ya reparte el regalo conjunto a cada miembro, así que
+// basta con mirar si a cada invitado le consta algún regalo. Solo cuentan los CONFIRMADOS: quien ha
+// dicho que no viene no va a regalar, y de quien está pendiente de confirmar todavía no se sabe nada.
+function balanceRegalosInvitados(guests, pagos, gastos) {
+  const regalos = regalosPorInvitado(guests || [], pagos || [], gastos || []);
+  const confirmados = (guests || []).filter((g) => g.confirmado === "Si");
+  const sinRegalo = confirmados.filter((g) => !(regalos[g.id] || 0));
+  // Confirmados sin familia asignada: si tipificas los regalos por familia, estos nunca se van a marcar
+  // solos aunque su gente ya haya regalado, así que inflarían el "faltan por regalar" sin que se note.
+  const sinFamilia = sinRegalo.filter((g) => !g.familia);
+  return {
+    confirmados: confirmados.length,
+    conRegalo: confirmados.length - sinRegalo.length,
+    restantes: sinRegalo.length,
+    sinRegalo,
+    sinFamilia,
+  };
+}
+
+// Agrupa los invitados que aún no han regalado por familia, para poder enseñar "quién falta" sin
+// repetir a cada miembro de la misma familia. Los que no tienen familia salen sueltos, por su nombre.
+function pendientesAgrupados(sinRegalo, familias) {
+  const vistos = new Map();
+  (sinRegalo || []).forEach((g) => {
+    const clave = g.familia || `solo:${g.id}`;
+    if (vistos.has(clave)) return;
+    vistos.set(clave, g.familia ? familiaLabel(familias, g.familia) : g.n);
+  });
+  return [...vistos.values()].filter(Boolean);
+}
+
 // Bebidas mencionadas en el cuestionario RSVP (gestionable: añade, edita o elimina)
 const BEBIDAS_INIT = [
   { id: "beb_0", bebida: "Cerveza", menciones: 12, quien: "Joan&Maria Amengual, Xavi&Meri Xavi, Xisco&Fina, Pilar&Noah, Grego&Antonia, Jaume/Sandra/Pedrito, Xisco Meri&Meri Xisco, Julio, Gonzalo&Anabel, Biel&Sonia, Sarita&Marc" },
@@ -884,6 +922,38 @@ function eventosFuturos(datos) {
   return ev.sort((a, b) => a.fecha.localeCompare(b.fecha) || a.concepto.localeCompare(b.concepto));
 }
 
+// Movimientos planificados que NO se pueden colocar en el calendario de caja: o les falta la fecha (sin
+// fecha no hay forma de saber en qué orden afectan al saldo) o salen de una cuenta que no es ninguna de
+// las dos de la boda. Antes se descartaban en silencio — ni sumaban, ni restaban, ni se veían en ninguna
+// parte — así que un gasto o un regalo registrado sin fecha desaparecía de la previsión sin avisar.
+// Ahora se devuelven aparte para poder listarlos y que sepas que siguen ahí, pendientes de concretar.
+function movimientosSinUbicar(datos) {
+  const { pagos, gastos } = datos;
+  const tipoPorPartida = mapaTipoPartida(gastos);
+  const nombrePartida = {};
+  (gastos || []).forEach((g) => { nombrePartida[g.id] = g.c; });
+  return (pagos || [])
+    .filter((p) => (p.situacion || "Realizado") === "Planificado")
+    .filter((p) => !p.fecha || !CUENTAS_LIQUIDEZ.includes(p.cuenta))
+    .map((p) => ({
+      id: p.id || (p.concepto + p.cantidad),
+      concepto: p.concepto || "Pago planificado",
+      detalle: nombrePartida[p.partida] || "",
+      cuenta: p.cuenta || "",
+      importe: signoPago(p, tipoPorPartida) * (+p.cantidad || 0),
+      motivo: !p.fecha ? "Le falta la fecha" : "Cuenta fuera de la hucha",
+    }));
+}
+
+// Pagos que apuntan a una partida que ya no existe (quedaron sueltos al borrar una partida en versiones
+// antiguas de la app, que no se llevaba los pagos por delante). Siguen moviendo el saldo de las cuentas
+// —es dinero que salió o entró de verdad— pero no se ven en ninguna parte de la pestaña Gastos, así que
+// conviene sacarlos a la luz antes de fiarse de los números.
+function pagosHuerfanos(pagos, gastos) {
+  const idsPartida = new Set((gastos || []).map((g) => g.id));
+  return (pagos || []).filter((p) => p.partida && !idsPartida.has(p.partida));
+}
+
 // Calendario de caja: coge los saldos reales de hoy y va aplicando los eventos futuros uno a uno, para
 // saber con cuánto os quedáis en cada cuenta después de cada movimiento. Es la vista que contesta
 // "¿nos llega para pagarlo todo el 1 de octubre?" sin tener que echar cuentas a mano.
@@ -901,12 +971,32 @@ function calendarioCaja(datos) {
 // ─────────────────────────────────────────────────────────
 // STORAGE helpers
 // ─────────────────────────────────────────────────────────
+// Devuelve { estado, problema }. `problema` NO es null cuando no se ha podido leer lo guardado — por un
+// fallo de red ("lectura") o porque lo que había no se puede interpretar ("corrupto"). Esa distinción es
+// crítica: "no hay nada guardado" significa que es la primera vez y se puede sembrar sin peligro, pero
+// "no he podido leer" significa que quizá SÍ haya datos que no estamos viendo, y entonces guardar
+// escribiría los datos de ejemplo encima de los de verdad. En ese caso la app entra en modo seguro y no
+// escribe nada hasta que una lectura funcione.
 async function loadState() {
+  let res;
   try {
-    const res = await window.storage.get("boda-app-state", true);
-    if (res?.value) return JSON.parse(res.value);
-  } catch (e) { /* no existe aún */ }
-  return null;
+    res = await window.storage.get("boda-app-state", true);
+  } catch (e) {
+    return { estado: null, problema: "lectura" };
+  }
+  const leer = (texto) => {
+    try { return texto ? JSON.parse(texto) : null; } catch (e) { return undefined; } // undefined = corrupto
+  };
+  if (window.storage.lecturaRemotaFallo) {
+    // Sin respuesta de la hoja. Si hay copia local la devolvemos para poder consultarla, pero marcamos
+    // el problema: no sabemos si la hoja tiene algo más nuevo, así que no se escribe.
+    const estado = leer(res?.value);
+    return { estado: estado === undefined ? null : estado, problema: "lectura" };
+  }
+  if (!res?.value) return { estado: null, problema: null }; // de verdad no hay nada guardado todavía
+  const estado = leer(res.value);
+  if (estado === undefined) return { estado: null, problema: "corrupto" };
+  return { estado, problema: null };
 }
 async function saveState(state) {
   try {
@@ -1059,10 +1149,13 @@ function limpiarPagosDuplicadosPorId(savedPagos) {
 // ...y nunca reañade un pago que hayas borrado tú a propósito: sin esa lista de borrados, esta misma
 // función veía que el pago "faltaba" en tu guardado y te lo devolvía en la siguiente carga, así que el
 // borrado parecía funcionar pero se deshacía solo al recargar.
-function mergePagosWithLatest(savedPagos, pagosEliminados = []) {
+function mergePagosWithLatest(savedPagos, pagosEliminados = [], gastosEliminados = []) {
   const savedIds = new Set(savedPagos.map((p) => p.id));
   const eliminados = new Set(pagosEliminados);
-  const nuevos = PAGOS_INIT.filter((p) => !savedIds.has(p.id) && !eliminados.has(p.id));
+  // Tampoco se reañade un pago cuya PARTIDA hayas borrado: volvería como pago huérfano, sin aparecer en
+  // ninguna partida de la pestaña Gastos pero moviendo igualmente el saldo de las cuentas.
+  const partidasBorradas = new Set(gastosEliminados);
+  const nuevos = PAGOS_INIT.filter((p) => !savedIds.has(p.id) && !eliminados.has(p.id) && !partidasBorradas.has(p.partida));
   return nuevos.length ? [...savedPagos, ...nuevos] : savedPagos;
 }
 
@@ -1459,6 +1552,11 @@ function TabFinanzas({ gastos, setGastos, guests, pagos, devoluciones, estimacio
 
   // ── Proyección
   const calendario = calendarioCaja(datos);
+  // Planificados que no caben en el calendario (sin fecha, o en una cuenta que no es de la boda).
+  const sinUbicar = movimientosSinUbicar(datos);
+  const huerfanos = pagosHuerfanos(pagos, gastos);
+  const sinUbicarSalidas = sinUbicar.filter((m) => m.importe < 0).reduce((t, m) => t + m.importe, 0);
+  const sinUbicarEntradas = sinUbicar.filter((m) => m.importe > 0).reduce((t, m) => t + m.importe, 0);
   const saldoFinal = calendario.length ? calendario[calendario.length - 1].saldoTotal : disponibleHoy;
   const minimo = calendario.reduce((min, f) => (f.saldoTotal < min.saldoTotal ? f : min),
     { saldoTotal: disponibleHoy, fecha: hoy, concepto: "Saldo de hoy" });
@@ -1472,7 +1570,10 @@ function TabFinanzas({ gastos, setGastos, guests, pagos, devoluciones, estimacio
   });
   const importeSinPlanificar = sinPlanificar.reduce((s, g) => s + ((+g.total || 0) - (paidMap[g.id] || 0)), 0);
 
-  const regalosPendientes = (+(estimacionRegalos || {}).invitadosRestantes || 0) * (+(estimacionRegalos || {}).cantidadPorInvitado || 0);
+  // Mismo cálculo que la tarjeta de estimación de la pestaña Gastos, para que las dos digan lo mismo:
+  // invitados confirmados que todavía no tienen ningún regalo registrado × lo que esperáis de cada uno.
+  const balanceRegalos = balanceRegalosInvitados(guests, pagos, gastos);
+  const regalosPendientes = balanceRegalos.restantes * (+(estimacionRegalos || {}).cantidadPorInvitado || 0);
 
   // Adultos que asisten (para la estimación de regalos del día de la boda)
   const asisten = guests.filter((g) => g.confirmado !== "No" && g.comida !== "No");
@@ -1553,6 +1654,27 @@ function TabFinanzas({ gastos, setGastos, guests, pagos, devoluciones, estimacio
         </Card>
       )}
 
+      {huerfanos.length > 0 && (
+        <Card style={{ marginBottom: 14, background: C.amberLight, border: `1px solid ${C.amber}55` }}>
+          <div style={{ fontSize: 13, color: C.amber, fontWeight: 600, marginBottom: 6 }}>
+            🔎 {huerfanos.length} pago{huerfanos.length > 1 ? "s" : ""} sin partida
+          </div>
+          <div style={{ fontSize: 12, color: C.sub, marginBottom: 8 }}>
+            Est{huerfanos.length > 1 ? "os pagos quedaron" : "e pago quedó"} suelt{huerfanos.length > 1 ? "os" : "o"} al
+            borrar su partida en una versión antigua de la app. <strong>Siguen contando en los saldos</strong> de
+            arriba, pero no aparecen en ninguna partida de la pestaña Gastos, así que es fácil que descuadren
+            las cuentas sin que se vea por qué. Revísal{huerfanos.length > 1 ? "os" : "o"} y bórral{huerfanos.length > 1 ? "os" : "o"} si
+            ya no deberían estar.
+          </div>
+          {huerfanos.map((p) => (
+            <div key={p.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 12, padding: "4px 0", borderBottom: `1px solid ${C.amber}22` }}>
+              <span>{p.concepto || "(sin concepto)"}<span style={{ color: C.sub }}>{p.fecha ? ` · ${p.fecha}` : ""}{p.cuenta ? ` · ${p.cuenta}` : ""}</span></span>
+              <strong>{fmt(+p.cantidad || 0)}</strong>
+            </div>
+          ))}
+        </Card>
+      )}
+
       {/* ── VEREDICTO ──────────────────────────────────────────────── */}
       <Card style={{ marginBottom: 14, background: llegais ? C.greenLight : C.redLight, border: `1px solid ${llegais ? C.green : C.red}33` }}>
         <div style={{ fontSize: 14, color: llegais ? C.green : C.red, fontWeight: 600, marginBottom: 6 }}>
@@ -1563,6 +1685,7 @@ function TabFinanzas({ gastos, setGastos, guests, pagos, devoluciones, estimacio
         <div style={{ fontSize: 12, color: C.sub }}>
           Hoy tenéis {fmt(disponibleHoy)} entre las dos cuentas. Contando los pagos planificados, el pendiente de las partidas que ya tienen fecha y las aportaciones mensuales que falten por meter, acabaríais con {fmt(saldoFinal)}.
           {importeSinPlanificar > 0.5 && <> Ojo: hay {fmt(importeSinPlanificar)} en {sinPlanificar.length} partida{sinPlanificar.length > 1 ? "s" : ""} sin fecha de pago, que todavía <strong>no</strong> están contados aquí.</>}
+          {sinUbicar.length > 0 && <> Y hay {sinUbicar.length} movimiento{sinUbicar.length > 1 ? "s" : ""} planificado{sinUbicar.length > 1 ? "s" : ""} que tampoco se {sinUbicar.length > 1 ? "cuentan" : "cuenta"}, porque {sinUbicar.length > 1 ? "les falta" : "le falta"} la fecha o {sinUbicar.length > 1 ? "están" : "está"} en otra cuenta — los tienes listados bajo el calendario.</>}
           {regalosPendientes > 0 && <> Aparte, esperáis unos {fmt(regalosPendientes)} más en regalos de invitados, que tampoco se cuentan hasta que los recibáis.</>}
         </div>
       </Card>
@@ -1661,6 +1784,33 @@ function TabFinanzas({ gastos, setGastos, guests, pagos, devoluciones, estimacio
                 ))}
               </tbody>
             </table>
+          </div>
+        )}
+
+        {sinUbicar.length > 0 && (
+          <div style={{ padding: "14px 20px 16px", borderTop: `1px solid ${C.grayMid}`, background: C.amberLight }}>
+            <div style={{ fontSize: 12, fontWeight: 700, color: C.amber, marginBottom: 6, textTransform: "uppercase", letterSpacing: ".5px" }}>
+              ⚠️ Planificados que no puedo colocar en el calendario
+            </div>
+            <div style={{ fontSize: 12, color: C.sub, marginBottom: 10 }}>
+              Estos movimientos están registrados pero <strong>no</strong> se cuentan arriba: o no tienen fecha (sin fecha no se sabe en qué momento mueven el saldo) o salen de una cuenta que no es la de boda ni el efectivo. Ponles fecha y cuenta desde la pestaña Gastos y se colocarán solos.
+            </div>
+            {sinUbicar.map((m) => (
+              <div key={m.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10, fontSize: 12, padding: "6px 0", borderBottom: `1px solid ${C.amber}22` }}>
+                <span>
+                  {m.concepto}
+                  <span style={{ color: C.sub }}>{m.detalle ? ` · ${m.detalle}` : ""}{m.cuenta ? ` · ${m.cuenta}` : ""}</span>
+                  <span style={{ fontSize: 10, fontWeight: 700, color: C.amber, marginLeft: 6 }}>{m.motivo.toUpperCase()}</span>
+                </span>
+                <strong style={{ color: m.importe < 0 ? C.red : C.teal, whiteSpace: "nowrap" }}>
+                  {m.importe < 0 ? "−" : "+"}{fmt(Math.abs(m.importe))}
+                </strong>
+              </div>
+            ))}
+            <div style={{ display: "flex", gap: 18, flexWrap: "wrap", marginTop: 10, fontSize: 12 }}>
+              {sinUbicarSalidas < -0.5 && <span>Por pagar sin fecha: <strong style={{ color: C.red }}>{fmt(Math.abs(sinUbicarSalidas))}</strong></span>}
+              {sinUbicarEntradas > 0.5 && <span>Por recibir sin fecha: <strong style={{ color: C.teal }}>{fmt(sinUbicarEntradas)}</strong></span>}
+            </div>
           </div>
         )}
       </Card>
@@ -1843,7 +1993,9 @@ function DevolucionesPanel({ deudas, devoluciones, setDevoluciones }) {
 // ─────────────────────────────────────────────────────────
 function PagosDePartida({ gasto, pagos, setPagos, deletePago, guests, familias }) {
   const [adding, setAdding] = useState(false);
-  const [newP, setNewP] = useState({ concepto: "", cantidad: "", fecha: "", metodo: "Transferencia", cuenta: "BBVA Boda", comentario: "", situacion: "Planificado", quien: "" });
+  // La fecha arranca en HOY en vez de vacía: un pago planificado sin fecha no se puede colocar en el
+  // calendario de caja, y antes eso hacía que desapareciera de la previsión sin que te enterases.
+  const [newP, setNewP] = useState({ concepto: "", cantidad: "", fecha: hoyISO(), metodo: "Transferencia", cuenta: "BBVA Boda", comentario: "", situacion: "Planificado", quien: "" });
   const [editP, setEditP] = useState(null);
   const [draftP, setDraftP] = useState({});
 
@@ -1860,7 +2012,7 @@ function PagosDePartida({ gasto, pagos, setPagos, deletePago, guests, familias }
   const addPago = () => {
     if (!newP.concepto.trim()) return;
     setPagos([...pagos, { ...newP, cantidad: +newP.cantidad || 0, partida: gasto.id, id: "pago_" + Date.now() }]);
-    setNewP({ concepto: "", cantidad: "", fecha: "", metodo: "Transferencia", cuenta: "BBVA Boda", comentario: "", situacion: "Planificado", quien: "" });
+    setNewP({ concepto: "", cantidad: "", fecha: hoyISO(), metodo: "Transferencia", cuenta: "BBVA Boda", comentario: "", situacion: "Planificado", quien: "" });
     setAdding(false);
   };
   const savePago = () => {
@@ -1999,6 +2151,11 @@ function TabGastos({ gastos, setGastos, deleteGasto, deletePago, pagos, setPagos
   const totalT = gastosNormales.reduce((s, g) => s + g.total, 0);
   const totalP = gastosNormales.reduce((s, g) => s + paidOf(g), 0);
   const totalIngresos = ingresos.reduce((s, g) => s + paidOf(g), 0);
+
+  // Estimación automática de regalos pendientes: confirmados menos los que ya tienen regalo registrado
+  // (el regalo de una familia cuenta por todos sus miembros).
+  const balanceRegalos = useMemo(() => balanceRegalosInvitados(guests, pagos, gastos), [guests, pagos, gastos]);
+  const pendientesRegalo = useMemo(() => pendientesAgrupados(balanceRegalos.sinRegalo, familias), [balanceRegalos, familias]);
 
   // Pendientes de devolver: pagos hechos desde cuentas personales (Trade Republic Iván / Caixa Marga)
   // o con el préstamo de los padres, en vez de la cuenta compartida BBVA Boda — antes se veía en la
@@ -2195,18 +2352,23 @@ function TabGastos({ gastos, setGastos, deleteGasto, deletePago, pagos, setPagos
 
       <Card title="🎁 Estimación de regalos pendientes de invitados" style={{ marginTop: ingresos.length ? 16 : 0 }}>
         <div style={{ fontSize: 12, color: C.sub, marginBottom: 12 }}>
-          Cálculo aparte de lo ya recibido arriba: cuánto esperáis recibir todavía de los invitados que aún no os han dado su regalo. Ajusta los dos números según vayáis teniendo más claro quién falta y cuánto suele dar cada uno.
+          Cuántos invitados confirmados os faltan por regalar, calculado solo: se cuentan los confirmados y se descuentan los que ya tienen un regalo registrado. Como los regalos los tipificas por familia, el regalo de una familia marca a todos sus miembros de golpe. Tú solo pones cuánto esperáis de media por invitado.
+        </div>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(130px,1fr))", gap: 12, marginBottom: 14 }}>
+          <div style={{ border: `1px solid ${C.grayMid}`, borderRadius: 10, padding: "12px 14px" }}>
+            <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", color: C.sub, marginBottom: 4 }}>Invitados confirmados</div>
+            <div style={{ fontSize: 21, fontWeight: 700 }}>{balanceRegalos.confirmados}</div>
+          </div>
+          <div style={{ border: `1px solid ${C.grayMid}`, borderRadius: 10, padding: "12px 14px" }}>
+            <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", color: C.sub, marginBottom: 4 }}>Ya han regalado</div>
+            <div style={{ fontSize: 21, fontWeight: 700, color: C.teal }}>− {balanceRegalos.conRegalo}</div>
+          </div>
+          <div style={{ border: `1px solid ${C.amber}44`, background: C.amberLight, borderRadius: 10, padding: "12px 14px" }}>
+            <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", color: C.amber, marginBottom: 4 }}>Faltan por regalar</div>
+            <div style={{ fontSize: 21, fontWeight: 700, color: C.amber }}>{balanceRegalos.restantes}</div>
+          </div>
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 14, alignItems: "end" }}>
-          <div>
-            <div style={{ fontSize: 11, fontWeight: 600, color: C.sub, marginBottom: 6, textTransform: "uppercase", letterSpacing: ".5px" }}>Invitados restantes por regalo</div>
-            <Input
-              type="number"
-              value={estimacionRegalos.invitadosRestantes}
-              onChange={(v) => setEstimacionRegalos({ ...estimacionRegalos, invitadosRestantes: v === "" ? "" : +v })}
-              style={{ width: "100%" }}
-            />
-          </div>
           <div>
             <div style={{ fontSize: 11, fontWeight: 600, color: C.sub, marginBottom: 6, textTransform: "uppercase", letterSpacing: ".5px" }}>Regalo estimado por invitado (€)</div>
             <Input
@@ -2218,9 +2380,22 @@ function TabGastos({ gastos, setGastos, deleteGasto, deletePago, pagos, setPagos
           </div>
           <div style={{ background: C.tealLight, borderRadius: 10, padding: "13px 15px" }}>
             <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", color: C.teal, marginBottom: 4 }}>Total estimado a recibir</div>
-            <div style={{ fontSize: 21, fontWeight: 700, color: C.teal }}>{fmt((+estimacionRegalos.invitadosRestantes || 0) * (+estimacionRegalos.cantidadPorInvitado || 0))}</div>
+            <div style={{ fontSize: 21, fontWeight: 700, color: C.teal }}>{fmt(balanceRegalos.restantes * (+estimacionRegalos.cantidadPorInvitado || 0))}</div>
+            <div style={{ fontSize: 11, color: C.sub, marginTop: 2 }}>{balanceRegalos.restantes} × {fmt(+estimacionRegalos.cantidadPorInvitado || 0)}</div>
           </div>
         </div>
+
+        {pendientesRegalo.length > 0 && (
+          <div style={{ marginTop: 14, padding: "10px 14px", background: C.grayLight, borderRadius: 8, fontSize: 12, color: C.sub }}>
+            <strong style={{ color: C.text }}>Aún sin regalo registrado ({pendientesRegalo.length}):</strong> {pendientesRegalo.join(" · ")}.
+          </div>
+        )}
+
+        {balanceRegalos.sinFamilia.length > 0 && (
+          <div style={{ marginTop: 10, padding: "10px 14px", background: C.amberLight, borderRadius: 8, fontSize: 12, color: C.amber }}>
+            <strong>⚠️ Ojo:</strong> hay {balanceRegalos.sinFamilia.length} invitado{balanceRegalos.sinFamilia.length > 1 ? "s" : ""} confirmado{balanceRegalos.sinFamilia.length > 1 ? "s" : ""} sin familia asignada ({balanceRegalos.sinFamilia.map((g) => g.n).join(", ")}). Como tipificas los regalos por familia, a est{balanceRegalos.sinFamilia.length > 1 ? "os" : "e"} no se le{balanceRegalos.sinFamilia.length > 1 ? "s" : ""} va a marcar el regalo aunque su gente ya lo haya dado, así que puede{balanceRegalos.sinFamilia.length > 1 ? "n" : ""} estar inflando el número de arriba. Asígnale{balanceRegalos.sinFamilia.length > 1 ? "s" : ""} familia en la pestaña Invitados.
+          </div>
+        )}
       </Card>
     </div>
   );
@@ -3338,6 +3513,21 @@ function BodaApp() {
   const [revisar, setRevisarRaw] = useState(REVISAR_INIT);
   const [loaded, setLoaded] = useState(false);
   const [saveStatus, setSaveStatus] = useState("idle"); // idle | saving | saved | error
+  // MODO SEGURO: null = todo normal. "lectura" = no se pudo leer lo guardado. "corrupto" = lo guardado
+  // no se puede interpretar. Mientras esté activo la app NO escribe nada, porque lo que se ve en
+  // pantalla podrían ser los datos de ejemplo y guardarlos borraría los de verdad.
+  const [modoSeguro, setModoSeguro] = useState(null);
+  // Se lee desde persist(), que es un useCallback sin dependencias y no vería el valor del estado.
+  const modoSeguroRef = useRef(null);
+  // Un único sitio donde se decide si además de avisar hay que BLOQUEAR el guardado. "sin-conexion"
+  // solo avisa (en pantalla están los datos reales); el resto de motivos bloquean.
+  const activarModoSeguro = (motivo) => {
+    modoSeguroRef.current = motivo === "sin-conexion" ? null : motivo;
+    setModoSeguro(motivo);
+  };
+  // Lo último que se leyó de verdad, tal cual. snapshot() parte de aquí para no perder claves que esta
+  // versión de la app todavía no conozca (p.ej. un bloque nuevo guardado desde un móvil ya actualizado).
+  const estadoGuardadoRef = useRef(null);
   // Preferencia puramente visual de este dispositivo/navegador: no viaja a Google Sheets ni a otros
   // dispositivos, cada uno la recuerda por su cuenta (útil para enseñar la pantalla sin que se vean
   // las cantidades, sin afectar a lo que ve el resto).
@@ -3360,8 +3550,17 @@ function BodaApp() {
   // Load persisted state on mount
   useEffect(() => {
     (async () => {
-      const st = await loadState();
+      const { estado: st, problema } = await loadState();
+      // Dos situaciones muy distintas, y conviene no confundirlas:
+      //   · No se pudo leer Y no hay nada que enseñar  -> en pantalla están los datos de EJEMPLO. Guardar
+      //     ahora los escribiría encima de los reales, así que se bloquea todo guardado (modo seguro).
+      //   · No se pudo leer pero sí hay copia local    -> en pantalla están TUS datos, solo que puede que
+      //     falten cambios hechos desde otro dispositivo. Se sigue guardando con normalidad (en local, y
+      //     se reintenta la subida), pero se avisa para que refresques antes de fiarte del todo.
+      if (problema === "corrupto" || (problema === "lectura" && !st)) activarModoSeguro(problema);
+      else if (problema === "lectura") activarModoSeguro("sin-conexion");
       if (st) {
+        estadoGuardadoRef.current = st;
         // Se leen ANTES que nada: las migraciones de abajo las necesitan para no resucitar lo borrado.
         const gEliminados = st.gastosEliminados || [];
         const pEliminados = st.pagosEliminados || [];
@@ -3379,12 +3578,14 @@ function BodaApp() {
           mergedGuests = mergeGuestsWithLatest(st.guests);
           setGuestsRaw(mergedGuests);
         }
-        let mergedPagos = st.pagos || [];
-        if (st.pagos) {
+        // OJO: si lo guardado NO trae el bloque de pagos (un guardado incompleto, por ejemplo), hay que
+        // quedarse con los que ya hay en memoria en vez de vaciarlos — vaciarlos y guardar después
+        // borraría todo el registro de pagos de golpe.
+        let mergedPagos = st.pagos
           // Añade pagos nuevos de PAGOS_INIT (p.ej. el 50% del catering pagado el 11/08/2026) que no
           // tuvieras guardados todavía, sin duplicar ni tocar los que ya tenías.
-          mergedPagos = mergePagosWithLatest(st.pagos, pEliminados);
-        }
+          ? mergePagosWithLatest(st.pagos, pEliminados, gEliminados)
+          : pagos;
         // Por si tu navegador llegó a migrar (con una versión anterior de esta migración, con un bug) el
         // antiguo "Ajuste de conciliación" como si fuera un ingreso real de 895€: se quita, ya no hace
         // falta ningún ajuste a mano.
@@ -3495,13 +3696,29 @@ function BodaApp() {
 
   // Auto-save whenever data changes (after initial load)
   const persist = useCallback(async (next) => {
+    // Cortafuegos: solo se bloquea cuando en pantalla podrían estar los datos de ejemplo. Estar
+    // temporalmente sin conexión ("sin-conexion") NO bloquea: ahí lo que se ve son datos reales.
+    if (modoSeguroRef.current && modoSeguroRef.current !== "sin-conexion") {
+      setSaveStatus("error");
+      return;
+    }
     setSaveStatus("saving");
     const ok = await saveState(next);
     setSaveStatus(ok ? "saved" : "error");
     if (ok) setTimeout(() => setSaveStatus("idle"), 1800);
   }, []);
 
-  const snapshot = (over = {}) => ({ gastos, guests, pagos, devoluciones, estimacionRegalos, gastosEliminados, pagosEliminados, cuadres, traspasos, aportaciones, tablesConfig, mesasEliminadas, elementos, familias, bebidas, canciones, revisar, ...over });
+  // Parte de lo que se leyó guardado para no perder ningún bloque que esta versión no conozca, y encima
+  // pone lo que la app sí gestiona. `movimientos` se deja fuera a propósito: es un registro antiguo que
+  // ya se migró a `pagos` y volver a guardarlo haría que se migrase una y otra vez.
+  const snapshot = (over = {}) => ({
+    ...(estadoGuardadoRef.current || {}),
+    gastos, guests, pagos, devoluciones, estimacionRegalos, gastosEliminados, pagosEliminados,
+    cuadres, traspasos, aportaciones, tablesConfig, mesasEliminadas, elementos, familias,
+    bebidas, canciones, revisar,
+    movimientos: undefined,
+    ...over,
+  });
 
   const setGastos = (g) => { setGastosRaw(g); persist(snapshot({ gastos: g })); };
   const setGuests = (gu) => { setGuestsRaw(gu); persist(snapshot({ guests: gu })); };
@@ -3576,15 +3793,26 @@ function BodaApp() {
 
   // Recarga los datos guardados (útil si tu pareja ha hecho cambios desde su móvil)
   const refreshData = async () => {
-    const st = await loadState();
+    const { estado: st, problema } = await loadState();
+    if (problema) {
+      // Sigue sin poder leerse. Si ni siquiera hay datos que mostrar, modo seguro duro; si los hay,
+      // basta con avisar de que seguimos sin conexión.
+      if (problema === "corrupto" || !st) activarModoSeguro(problema);
+      else activarModoSeguro("sin-conexion");
+      setSaveStatus("error");
+      return;
+    }
+    // La lectura ha funcionado: ya podemos volver a guardar con confianza.
+    if (modoSeguroRef.current) activarModoSeguro(null);
     if (st) {
+      estadoGuardadoRef.current = st;
       // Lo borrado a propósito tampoco vuelve al refrescar (p.ej. cuando tu pareja guarda desde su móvil).
       const gEliminados = st.gastosEliminados || gastosEliminados;
       const pEliminados = st.pagosEliminados || pagosEliminados;
       setGastosEliminadosRaw(gEliminados);
       setPagosEliminadosRaw(pEliminados);
       let nuevosGastos = st.gastos ? mergeGastosWithLatest(st.gastos, gEliminados) : gastos;
-      let nuevosPagos = limpiarPagosDuplicadosPorId(limpiarAjusteFantasma(st.pagos ? mergePagosWithLatest(st.pagos, pEliminados) : pagos));
+      let nuevosPagos = limpiarPagosDuplicadosPorId(limpiarAjusteFantasma(st.pagos ? mergePagosWithLatest(st.pagos, pEliminados, gEliminados) : pagos));
       if (st.movimientos && st.movimientos.length) {
         const migrados = migrarMovimientosAPagos(st.movimientos, nuevosGastos);
         if (migrados.length) {
@@ -3732,9 +3960,43 @@ function BodaApp() {
             {tabs.find((t) => t.id === tab)?.icon} {tabs.find((t) => t.id === tab)?.label}
           </h1>
           <p style={{ fontSize: 12, color: C.sub, marginTop: 2 }}>
-            Cambios guardados automáticamente · Boda octubre 2026
+            {modoSeguro === "sin-conexion"
+              ? "📡 Guardando solo en este dispositivo · Boda octubre 2026"
+              : modoSeguro
+                ? "⚠️ Modo seguro — no se está guardando nada"
+                : "Cambios guardados automáticamente · Boda octubre 2026"}
           </p>
         </div>
+
+        {modoSeguro === "sin-conexion" && (
+          <div style={{ marginBottom: 18, padding: "13px 16px", background: C.amberLight, border: `1px solid ${C.amber}55`, borderRadius: 10 }}>
+            <div style={{ fontSize: 13, color: C.amber, lineHeight: 1.5 }}>
+              <strong>📡 Sin conexión con la hoja compartida.</strong> Estás viendo tus datos desde la copia de
+              este dispositivo y <strong>se siguen guardando aquí</strong>, pero puede que falten cambios hechos
+              desde otro móvil. En cuanto vuelva la conexión, pulsa 🔄 para traerlos antes de seguir tocando
+              números.
+            </div>
+          </div>
+        )}
+
+        {(modoSeguro === "lectura" || modoSeguro === "corrupto") && (
+          <div style={{ marginBottom: 18, padding: "16px 18px", background: C.redLight, border: `2px solid ${C.red}`, borderRadius: 12 }}>
+            <div style={{ fontSize: 15, fontWeight: 700, color: C.red, marginBottom: 8 }}>
+              ⚠️ No he podido leer vuestros datos guardados
+            </div>
+            <div style={{ fontSize: 13, color: C.text, marginBottom: 12, lineHeight: 1.5 }}>
+              {modoSeguro === "corrupto"
+                ? "Lo que hay guardado no se ha podido interpretar. "
+                : "No he conseguido conectar para leer lo que teníais guardado. "}
+              Lo que ves en pantalla <strong>puede no ser vuestra información real</strong>, así que
+              <strong> he bloqueado el guardado</strong>: nada de lo que toques se va a escribir, para no
+              arriesgarme a borrar los datos buenos. Comprueba la conexión y pulsa «Reintentar». Si vuelve a
+              fallar, cierra esta pestaña sin tocar nada y vuelve a abrirla más tarde — tus datos siguen a salvo
+              donde estaban.
+            </div>
+            <Btn variant="primary" onClick={refreshData}>🔄 Reintentar la lectura</Btn>
+          </div>
+        )}
         {tab === "finanzas" && <TabFinanzas gastos={gastos} setGastos={setGastos} guests={guests} pagos={pagos} devoluciones={devoluciones} estimacionRegalos={estimacionRegalos} cuadres={cuadres} setCuadres={setCuadres} traspasos={traspasos} setTraspasos={setTraspasos} aportaciones={aportaciones} setAportaciones={setAportaciones} />}
         {tab === "gastos" && <TabGastos gastos={gastos} setGastos={setGastos} deleteGasto={deleteGasto} deletePago={deletePago} pagos={pagos} setPagos={setPagos} devoluciones={devoluciones} setDevoluciones={setDevoluciones} guests={guests} familias={familias} estimacionRegalos={estimacionRegalos} setEstimacionRegalos={setEstimacionRegalos} />}
         {tab === "invitados" && <TabInvitados guests={guests} setGuests={setGuests} familias={familias} setFamilias={setFamilias} pagos={pagos} gastos={gastos} />}

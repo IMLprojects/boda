@@ -1066,24 +1066,18 @@ function mergeGuestsWithLatest(savedGuests) {
     if (latest.nota && !merged.nota) merged.nota = latest.nota;
     if (latest.origen && !merged.origen) merged.origen = latest.origen; // marca "Formulario" solo si no tenías nada puesto
     if (!merged.confirmado && latest.confirmado) merged.confirmado = latest.confirmado; // solo si seguía pendiente
-    if (merged.n === "Mar Ander" && merged.comida === "Pescado/Marisco" && latest.comida !== "Pescado/Marisco") {
-      merged.comida = latest.comida; // corrección puntual, solo si no la cambiaste ya tú mismo
-    }
     return merged;
   });
-  // Corrección: en una versión anterior, "Mama" y "Papa" (los padres de Marga) se marcaron por error como
-  // confirmados por formulario — el formulario lo habían respondido los padres de Iván, que ahora son las
-  // partidas separadas "Mama (I)" / "Papa (I)". Como el merge de arriba nunca pisa una confirmación que ya
-  // esté puesta, ese error se quedaba para siempre aunque la fuente original ya estuviera corregida. Esto
-  // lo revierte: si siguen exactamente en ese estado erróneo (confirmado "Sí" + vía "Formulario", nunca
-  // tocados a mano de otra forma), los deja como pendientes de verdad, tal y como están sus padres.
-  return merged1.map((g) => {
-    if ((g.n === "Mama" || g.n === "Papa") && g.confirmado === "Si" && g.origen === "Formulario") {
-      const { origen, ...resto } = g;
-      return { ...resto, confirmado: "" };
-    }
-    return g;
-  });
+  // AQUÍ HABÍA DOS "CORRECCIONES PUNTUALES" QUE SE QUITARON A PROPÓSITO, y conviene no volver a meterlas:
+  //   · una des-confirmaba a "Mama" y "Papa" si estaban confirmados con vía "Formulario"
+  //   · otra revertía el menú de "Mar Ander" si lo ponías en "Pescado/Marisco"
+  // El problema no era lo que corregían, sino que se re-aplicaban EN CADA CARGA. Como confirmar a alguien
+  // desde la pestaña Invitados no cambia su vía de confirmación, en cuanto Iván confirmaba a los padres de
+  // Marga volvían a salir sin confirmar en el siguiente arranque, una y otra vez, sin ningún aviso. Una
+  // corrección de datos antiguos solo debe aplicarse una vez; si se queda para siempre deja de ser una
+  // migración y se convierte en una regla que pelea contra lo que tú decides a mano, y siempre gana ella.
+  // Los valores correctos ya están en GUESTS_INIT, así que una instalación nueva no los necesita.
+  return merged1;
 }
 
 // Migración: añade a tus familias guardadas cualquier familia NUEVA que hayamos deducido del cuestionario
@@ -1205,18 +1199,12 @@ function mergePagosWithLatest(savedPagos, pagosEliminados = [], gastosEliminados
 // (solo si sigues en el valor antiguo — si ya lo cambiaste tú a mano, no lo toca), y (2) añade partidas
 // nuevas de GASTOS_INIT que no existían todavía (p.ej. "Mago", un gasto real que faltaba en el presupuesto).
 function mergeGastosWithLatest(savedGastos, gastosEliminados = []) {
-  const CORRECCIONES = [
-    { id: "g2", siSigueEn: 10000, nuevo: { total: 9848, estado: (e) => (e === "Reservado" ? "Confirmado" : e) } },
-    { id: "g13", siSigueEn: 150, nuevo: { total: 160 } },
-    { id: "g16", siSigueEn: 150, nuevo: { total: 300 } },
-  ];
-  const merged = savedGastos.map((g) => {
-    const c = CORRECCIONES.find((x) => x.id === g.id && x.siSigueEn === g.total);
-    if (!c) return g;
-    const cambios = { ...c.nuevo };
-    if (typeof cambios.estado === "function") cambios.estado = cambios.estado(g.estado);
-    return { ...g, ...cambios };
-  });
+  // IGUAL QUE CON LOS INVITADOS: aquí había una tabla de "correcciones" que, en cada carga, cambiaba el
+  // total de ciertas partidas si coincidía con un valor antiguo (Luna de miel 10000→9848, Alianzas
+  // 150→160, Mago 150→300). Se quitó porque se re-aplicaba siempre: si tú ponías a mano uno de esos
+  // importes, la app te lo cambiaba sola en el siguiente arranque, y en un presupuesto eso es inaceptable.
+  // Esas correcciones ya se aplicaron hace tiempo y los valores buenos están en GASTOS_INIT.
+  const merged = savedGastos;
   const savedIds = new Set(savedGastos.map((g) => g.id));
   // Igual que con los pagos: una partida que hayas borrado a propósito no vuelve nunca, aunque siga
   // existiendo en GASTOS_INIT.

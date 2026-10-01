@@ -619,21 +619,65 @@ function regalosPorInvitado(guests, pagos, gastos) {
   return map;
 }
 
+// Desglose de a quién cubre cada regalo registrado. Hace falta porque el número de "ya han regalado"
+// cuenta PERSONAS CONFIRMADAS DISTINTAS, no etiquetas de regalo, y por eso puede salir más bajo que lo
+// que uno cuenta a mano mirando la lista. Las tres razones posibles son siempre estas:
+//   · en una familia hay algún miembro que todavía no ha confirmado (no cuenta en ningún lado)
+//   · la familia tiene menos invitados dados de alta de los que sugiere su nombre
+//   · dos regalos distintos recaen sobre la misma persona (se cuenta una sola vez)
+// Devolver el detalle permite enseñarlo en pantalla y que el número se pueda cuadrar a mano.
+function coberturaRegalos(guests, pagos, gastos, familias) {
+  const ingresoIds = new Set((gastos || []).filter((g) => g.tipo === "ingreso").map((g) => g.id));
+  const filas = [];
+  const cubiertos = new Set(); // ids de invitados CONFIRMADOS que quedan cubiertos por algún regalo
+  (pagos || []).forEach((p) => {
+    if (!ingresoIds.has(p.partida)) return;
+    const q = parseQuien(p.quien);
+    if (!q) return; // regalo sin tipificar: no se puede atribuir a nadie
+    let miembros = [];
+    let etiqueta = "";
+    if (q.tipo === "familia") {
+      miembros = (guests || []).filter((g) => g.familia === q.id);
+      etiqueta = `👪 ${familiaLabel(familias, q.id) || q.id}`;
+    } else {
+      const invitado = (guests || []).find((x) => x.id === q.id);
+      miembros = invitado ? [invitado] : [];
+      etiqueta = invitado ? invitado.n : "(invitado que ya no existe)";
+    }
+    const confirmados = miembros.filter((g) => g.confirmado === "Si");
+    confirmados.forEach((g) => cubiertos.add(g.id));
+    filas.push({
+      id: p.id || p.concepto,
+      concepto: p.concepto || "(sin concepto)",
+      etiqueta,
+      cantidad: +p.cantidad || 0,
+      nConfirmados: confirmados.length,
+      noConfirmados: miembros.filter((g) => g.confirmado !== "Si"),
+      sinInvitados: miembros.length === 0,
+    });
+  });
+  return { filas, cubiertos };
+}
+
 // Cuántos invitados confirmados han hecho ya su regalo y cuántos faltan todavía. regalosPorInvitado()
 // ya aplica la regla correcta: un regalo a nombre de una familia marca a todos sus miembros, y uno a
 // nombre de una persona marca solo a esa persona — que es justo lo que hace falta para la gente que
 // viene sola, a la que no se le asigna ninguna familia. Así que aquí basta con mirar si a cada invitado
 // le consta algún regalo. Solo cuentan los CONFIRMADOS: quien ha dicho que no viene no va a regalar, y
 // de quien está pendiente de confirmar todavía no se sabe nada.
-function balanceRegalosInvitados(guests, pagos, gastos) {
-  const regalos = regalosPorInvitado(guests || [], pagos || [], gastos || []);
+function balanceRegalosInvitados(guests, pagos, gastos, familias) {
+  // Se usa la cobertura (¿hay un regalo registrado a su nombre o al de su familia?) en vez del importe:
+  // así un regalo apuntado con importe 0 —porque todavía no sabéis cuánto es— también marca a su gente,
+  // y además el titular y el desglose de abajo salen siempre del mismo cálculo, sin poder discrepar.
+  const { filas, cubiertos } = coberturaRegalos(guests, pagos, gastos, familias);
   const confirmados = (guests || []).filter((g) => g.confirmado === "Si");
-  const sinRegalo = confirmados.filter((g) => !(regalos[g.id] || 0));
+  const sinRegalo = confirmados.filter((g) => !cubiertos.has(g.id));
   return {
     confirmados: confirmados.length,
-    conRegalo: confirmados.length - sinRegalo.length,
+    conRegalo: cubiertos.size,
     restantes: sinRegalo.length,
     sinRegalo,
+    filas,
   };
 }
 
@@ -1570,6 +1614,7 @@ function TabFinanzas({ gastos, setGastos, guests, pagos, devoluciones, estimacio
 
   // Mismo cálculo que la tarjeta de estimación de la pestaña Gastos, para que las dos digan lo mismo:
   // invitados confirmados que todavía no tienen ningún regalo registrado × lo que esperáis de cada uno.
+  // (sin la lista de familias: aquí solo se usa el número, no las etiquetas del desglose)
   const balanceRegalos = balanceRegalosInvitados(guests, pagos, gastos);
   const regalosPendientes = balanceRegalos.restantes * (+(estimacionRegalos || {}).cantidadPorInvitado || 0);
 
@@ -2136,6 +2181,7 @@ function TabGastos({ gastos, setGastos, deleteGasto, deletePago, pagos, setPagos
   const [draft, setDraft] = useState({});
   const [adding, setAdding] = useState(false);
   const [newG, setNewG] = useState({ c: "", total: "", tipo: "gasto" });
+  const [verDesgloseRegalos, setVerDesgloseRegalos] = useState(false);
   const [expanded, setExpanded] = useState({}); // { [gastoId]: true }
 
   const paidMap = pagadoPorPartida(pagos);        // #1 pagado real por partida
@@ -2152,7 +2198,7 @@ function TabGastos({ gastos, setGastos, deleteGasto, deletePago, pagos, setPagos
 
   // Estimación automática de regalos pendientes: confirmados menos los que ya tienen regalo registrado
   // (el regalo de una familia cuenta por todos sus miembros).
-  const balanceRegalos = useMemo(() => balanceRegalosInvitados(guests, pagos, gastos), [guests, pagos, gastos]);
+  const balanceRegalos = useMemo(() => balanceRegalosInvitados(guests, pagos, gastos, familias), [guests, pagos, gastos, familias]);
   const pendientesRegalo = useMemo(() => pendientesAgrupados(balanceRegalos.sinRegalo, familias), [balanceRegalos, familias]);
 
   // Pendientes de devolver: pagos hechos desde cuentas personales (Trade Republic Iván / Caixa Marga)
@@ -2357,15 +2403,70 @@ function TabGastos({ gastos, setGastos, deleteGasto, deletePago, pagos, setPagos
             <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", color: C.sub, marginBottom: 4 }}>Invitados confirmados</div>
             <div style={{ fontSize: 21, fontWeight: 700 }}>{balanceRegalos.confirmados}</div>
           </div>
-          <div style={{ border: `1px solid ${C.grayMid}`, borderRadius: 10, padding: "12px 14px" }}>
-            <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", color: C.sub, marginBottom: 4 }}>Ya han regalado</div>
+          <div
+            onClick={() => setVerDesgloseRegalos((v) => !v)}
+            style={{ border: `1px solid ${C.grayMid}`, borderRadius: 10, padding: "12px 14px", cursor: "pointer" }}
+            title="Ver de dónde sale este número"
+          >
+            <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", color: C.sub, marginBottom: 4 }}>
+              Ya han regalado {verDesgloseRegalos ? "▾" : "▸"}
+            </div>
             <div style={{ fontSize: 21, fontWeight: 700, color: C.teal }}>− {balanceRegalos.conRegalo}</div>
+            <div style={{ fontSize: 10, color: C.sub, marginTop: 2 }}>personas, no regalos</div>
           </div>
           <div style={{ border: `1px solid ${C.amber}44`, background: C.amberLight, borderRadius: 10, padding: "12px 14px" }}>
             <div style={{ fontSize: 10, fontWeight: 700, textTransform: "uppercase", color: C.amber, marginBottom: 4 }}>Faltan por regalar</div>
             <div style={{ fontSize: 21, fontWeight: 700, color: C.amber }}>{balanceRegalos.restantes}</div>
           </div>
         </div>
+        {verDesgloseRegalos && (
+          <div style={{ marginBottom: 14, padding: "12px 14px", background: C.grayLight, borderRadius: 10 }}>
+            <div style={{ fontSize: 12, color: C.sub, marginBottom: 10 }}>
+              Este número cuenta <strong>personas confirmadas distintas</strong>, no regalos. Si al sumar los
+              nombres de la lista de regalos te sale más, la diferencia está en las líneas marcadas en ámbar:
+              gente sin confirmar, familias con menos invitados dados de alta de los que dice su nombre, o
+              alguien cubierto por dos regalos a la vez (solo cuenta una vez).
+            </div>
+            {balanceRegalos.filas.length === 0 && (
+              <div style={{ fontSize: 12, color: C.sub }}>Todavía no hay ningún regalo tipificado.</div>
+            )}
+            {balanceRegalos.filas.map((f) => {
+              const ojo = f.sinInvitados || f.noConfirmados.length > 0;
+              return (
+                <div key={f.id} style={{ display: "flex", justifyContent: "space-between", gap: 10, fontSize: 12, padding: "6px 0", borderBottom: `1px solid ${C.grayMid}` }}>
+                  <span>
+                    {f.concepto} <span style={{ color: C.sub }}>· {f.etiqueta}</span>
+                    {f.sinInvitados && (
+                      <div style={{ fontSize: 11, color: C.amber, fontWeight: 600 }}>
+                        ⚠️ No cuenta a nadie: no hay ningún invitado dado de alta con ese nombre o familia.
+                      </div>
+                    )}
+                    {f.noConfirmados.length > 0 && (
+                      <div style={{ fontSize: 11, color: C.amber }}>
+                        ⚠️ Sin confirmar, no {f.noConfirmados.length > 1 ? "cuentan" : "cuenta"}: {f.noConfirmados.map((g) => g.n).join(", ")}
+                      </div>
+                    )}
+                  </span>
+                  <strong style={{ whiteSpace: "nowrap", color: ojo ? C.amber : C.teal }}>
+                    {f.nConfirmados} {f.nConfirmados === 1 ? "persona" : "personas"}
+                  </strong>
+                </div>
+              );
+            })}
+            <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, fontWeight: 700, paddingTop: 8 }}>
+              <span>Personas confirmadas distintas con regalo</span>
+              <span style={{ color: C.teal }}>{balanceRegalos.conRegalo}</span>
+            </div>
+            {balanceRegalos.filas.reduce((t, f) => t + f.nConfirmados, 0) !== balanceRegalos.conRegalo && (
+              <div style={{ fontSize: 11, color: C.sub, marginTop: 4 }}>
+                La suma de las líneas da {balanceRegalos.filas.reduce((t, f) => t + f.nConfirmados, 0)}, pero el
+                total es {balanceRegalos.conRegalo} porque hay personas cubiertas por más de un regalo y solo
+                se cuentan una vez.
+              </div>
+            )}
+          </div>
+        )}
+
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 14, alignItems: "end" }}>
           <div>
             <div style={{ fontSize: 11, fontWeight: 600, color: C.sub, marginBottom: 6, textTransform: "uppercase", letterSpacing: ".5px" }}>Regalo estimado por invitado (€)</div>

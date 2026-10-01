@@ -619,23 +619,21 @@ function regalosPorInvitado(guests, pagos, gastos) {
   return map;
 }
 
-// Cuántos invitados confirmados han hecho ya su regalo y cuántos faltan todavía. Como los regalos se
-// tipifican por familia, regalosPorInvitado() ya reparte el regalo conjunto a cada miembro, así que
-// basta con mirar si a cada invitado le consta algún regalo. Solo cuentan los CONFIRMADOS: quien ha
-// dicho que no viene no va a regalar, y de quien está pendiente de confirmar todavía no se sabe nada.
+// Cuántos invitados confirmados han hecho ya su regalo y cuántos faltan todavía. regalosPorInvitado()
+// ya aplica la regla correcta: un regalo a nombre de una familia marca a todos sus miembros, y uno a
+// nombre de una persona marca solo a esa persona — que es justo lo que hace falta para la gente que
+// viene sola, a la que no se le asigna ninguna familia. Así que aquí basta con mirar si a cada invitado
+// le consta algún regalo. Solo cuentan los CONFIRMADOS: quien ha dicho que no viene no va a regalar, y
+// de quien está pendiente de confirmar todavía no se sabe nada.
 function balanceRegalosInvitados(guests, pagos, gastos) {
   const regalos = regalosPorInvitado(guests || [], pagos || [], gastos || []);
   const confirmados = (guests || []).filter((g) => g.confirmado === "Si");
   const sinRegalo = confirmados.filter((g) => !(regalos[g.id] || 0));
-  // Confirmados sin familia asignada: si tipificas los regalos por familia, estos nunca se van a marcar
-  // solos aunque su gente ya haya regalado, así que inflarían el "faltan por regalar" sin que se note.
-  const sinFamilia = sinRegalo.filter((g) => !g.familia);
   return {
     confirmados: confirmados.length,
     conRegalo: confirmados.length - sinRegalo.length,
     restantes: sinRegalo.length,
     sinRegalo,
-    sinFamilia,
   };
 }
 
@@ -2352,7 +2350,7 @@ function TabGastos({ gastos, setGastos, deleteGasto, deletePago, pagos, setPagos
 
       <Card title="🎁 Estimación de regalos pendientes de invitados" style={{ marginTop: ingresos.length ? 16 : 0 }}>
         <div style={{ fontSize: 12, color: C.sub, marginBottom: 12 }}>
-          Cuántos invitados confirmados os faltan por regalar, calculado solo: se cuentan los confirmados y se descuentan los que ya tienen un regalo registrado. Como los regalos los tipificas por familia, el regalo de una familia marca a todos sus miembros de golpe. Tú solo pones cuánto esperáis de media por invitado.
+          Cuántos invitados confirmados os faltan por regalar, calculado solo: se cuentan los confirmados y se descuentan los que ya tienen un regalo registrado. Un regalo a nombre de una <strong>familia</strong> da por regalados a todos sus miembros de golpe; uno a nombre de una <strong>persona</strong> cuenta como uno, que es lo que toca con quien viene solo. Tú solo pones cuánto esperáis de media por invitado.
         </div>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(130px,1fr))", gap: 12, marginBottom: 14 }}>
           <div style={{ border: `1px solid ${C.grayMid}`, borderRadius: 10, padding: "12px 14px" }}>
@@ -2391,11 +2389,6 @@ function TabGastos({ gastos, setGastos, deleteGasto, deletePago, pagos, setPagos
           </div>
         )}
 
-        {balanceRegalos.sinFamilia.length > 0 && (
-          <div style={{ marginTop: 10, padding: "10px 14px", background: C.amberLight, borderRadius: 8, fontSize: 12, color: C.amber }}>
-            <strong>⚠️ Ojo:</strong> hay {balanceRegalos.sinFamilia.length} invitado{balanceRegalos.sinFamilia.length > 1 ? "s" : ""} confirmado{balanceRegalos.sinFamilia.length > 1 ? "s" : ""} sin familia asignada ({balanceRegalos.sinFamilia.map((g) => g.n).join(", ")}). Como tipificas los regalos por familia, a est{balanceRegalos.sinFamilia.length > 1 ? "os" : "e"} no se le{balanceRegalos.sinFamilia.length > 1 ? "s" : ""} va a marcar el regalo aunque su gente ya lo haya dado, así que puede{balanceRegalos.sinFamilia.length > 1 ? "n" : ""} estar inflando el número de arriba. Asígnale{balanceRegalos.sinFamilia.length > 1 ? "s" : ""} familia en la pestaña Invitados.
-          </div>
-        )}
       </Card>
     </div>
   );

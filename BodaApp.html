@@ -987,6 +987,7 @@ function eventosFuturos(datos) {
     if (!CUENTAS_LIQUIDEZ.includes(p.cuenta)) return;
     ev.push({
       id: "pag_" + (p.id || p.concepto + p.fecha),
+      refId: p.id, // para poder cambiarle la cuenta desde el propio calendario
       fecha: p.fecha,
       concepto: p.concepto || "Pago planificado",
       detalle: nombrePartida[p.partida] || "",
@@ -1005,6 +1006,7 @@ function eventosFuturos(datos) {
     if (!g.fechaPrevista) return;
     ev.push({
       id: "part_" + g.id,
+      refId: g.id,
       fecha: g.fechaPrevista,
       concepto: `Resto ${g.c}`,
       detalle: "Pendiente de la partida",
@@ -1021,6 +1023,7 @@ function eventosFuturos(datos) {
     if (!(+a.importe)) return;
     ev.push({
       id: "apo_" + a.mes,
+      refId: a.mes,
       fecha: a.fecha,
       concepto: `Aportación de ${etiquetaMes(a.mes)}`,
       detalle: "Aportación mensual a la hucha",
@@ -1627,7 +1630,7 @@ function LineChartSVG({ series, height = 230, hoyMes, detalleMes }) {
 // decía que en octubre habría 11.439€ cuando en el banco había 2.755€: era una previsión teórica, no
 // dinero. Ahora el punto de partida es lo que tú cuadras ("hoy en BBVA Boda hay X"), y todo lo demás
 // se calcula hacia adelante desde ahí.
-function TabFinanzas({ gastos, setGastos, guests, pagos, devoluciones, estimacionRegalos, cuadres, setCuadres, traspasos, setTraspasos, aportaciones, setAportaciones }) {
+function TabFinanzas({ gastos, setGastos, guests, pagos, setPagos, devoluciones, estimacionRegalos, cuadres, setCuadres, traspasos, setTraspasos, aportaciones, setAportaciones }) {
   const [cuadrando, setCuadrando] = useState(null);      // cuenta que estás cuadrando ahora mismo
   const [draftCuadre, setDraftCuadre] = useState({ saldo: "", fecha: "" });
   const [nuevoTraspaso, setNuevoTraspaso] = useState(null); // objeto en edición, o null si el form está cerrado
@@ -1711,6 +1714,22 @@ function TabFinanzas({ gastos, setGastos, guests, pagos, devoluciones, estimacio
 
   const actualizarAportacion = (mes, campos) => {
     setAportaciones(aportaciones.map((a) => (a.mes === mes ? { ...a, ...campos } : a)));
+  };
+
+  // Cambia de qué cuenta sale (o entra) un movimiento del calendario, sin salir del calendario.
+  // Cada fila viene de un sitio distinto, así que hay que escribir en el origen que corresponda:
+  // el pendiente de una partida vive en el propio gasto, un pago planificado en el registro de pagos,
+  // y una aportación mensual en su fila de aportaciones. Como solo hay dos cuentas, el botón alterna
+  // entre ellas de un toque en vez de abrir un desplegable.
+  const cambiarCuentaEvento = (fila) => {
+    const nueva = fila.cuenta === CUENTA_HUCHA ? "Efectivo" : CUENTA_HUCHA;
+    if (fila.origen === "partida") {
+      setGastos(gastos.map((g) => (g.id === fila.refId ? { ...g, cuentaPrevista: nueva } : g)));
+    } else if (fila.origen === "pago") {
+      setPagos(pagos.map((p) => (p.id === fila.refId ? { ...p, cuenta: nueva } : p)));
+    } else if (fila.origen === "aportacion") {
+      setAportaciones(aportaciones.map((a) => (a.mes === fila.refId ? { ...a, cuenta: nueva } : a)));
+    }
   };
 
   const actualizarPartida = (id, campos) => {
@@ -1872,10 +1891,25 @@ function TabFinanzas({ gastos, setGastos, guests, pagos, devoluciones, estimacio
                     </td>
                     <td data-principal="" style={{ padding: "9px 12px", fontSize: 13, borderBottom: `1px solid ${C.grayLight}` }}>
                       {f.concepto}
-                      {f.atrasado && <span style={{ fontSize: 10, color: C.amber, fontWeight: 700, marginLeft: 6 }}>ATRASADO</span>}
-                      {f.detalle && <div style={{ fontSize: 10, color: C.sub }}>{f.detalle}</div>}
+                      {/* En móvil, el ⚠️ de la fecha ya avisa de que va atrasado, y el detalle es
+                          secundario: ambos sobran y además partían la línea. */}
+                      {f.atrasado && <span className="boda-solo-escritorio" style={{ fontSize: 10, color: C.amber, fontWeight: 700, marginLeft: 6 }}>ATRASADO</span>}
+                      {f.detalle && <div className="boda-solo-escritorio" style={{ fontSize: 10, color: C.sub }}>{f.detalle}</div>}
                     </td>
-                    <td data-label="Cuenta" style={{ padding: "9px 12px", fontSize: 12, color: C.sub, borderBottom: `1px solid ${C.grayLight}`, whiteSpace: "nowrap" }}>{f.cuenta}</td>
+                    <td data-label="Cuenta" data-movil="" style={{ padding: "9px 12px", fontSize: 12, borderBottom: `1px solid ${C.grayLight}`, whiteSpace: "nowrap" }}>
+                      <button
+                        onClick={() => cambiarCuentaEvento(f)}
+                        title={`Sale de ${f.cuenta}. Pulsa para cambiar a ${f.cuenta === CUENTA_HUCHA ? "Efectivo" : CUENTA_HUCHA}.`}
+                        style={{
+                          cursor: "pointer", border: "none", borderRadius: 20, padding: "5px 10px",
+                          fontSize: 11, fontWeight: 700, whiteSpace: "nowrap",
+                          background: f.cuenta === CUENTA_HUCHA ? C.tealLight : C.amberLight,
+                          color: f.cuenta === CUENTA_HUCHA ? C.teal : C.amber,
+                        }}
+                      >
+                        {f.cuenta === CUENTA_HUCHA ? "🏦 Boda" : "💵 Efectivo"}
+                      </button>
+                    </td>
                     <td data-label="Importe" data-movil="" style={{ padding: "9px 12px", fontSize: 13, fontWeight: 600, color: f.importe < 0 ? C.red : C.teal, borderBottom: `1px solid ${C.grayLight}`, whiteSpace: "nowrap" }}>
                       {f.importe < 0 ? "−" : "+"}{fmt(Math.abs(f.importe))}
                     </td>
@@ -4149,7 +4183,7 @@ function BodaApp() {
             <Btn variant="primary" onClick={refreshData}>🔄 Reintentar la lectura</Btn>
           </div>
         )}
-        {tab === "finanzas" && <TabFinanzas gastos={gastos} setGastos={setGastos} guests={guests} pagos={pagos} devoluciones={devoluciones} estimacionRegalos={estimacionRegalos} cuadres={cuadres} setCuadres={setCuadres} traspasos={traspasos} setTraspasos={setTraspasos} aportaciones={aportaciones} setAportaciones={setAportaciones} />}
+        {tab === "finanzas" && <TabFinanzas gastos={gastos} setGastos={setGastos} guests={guests} pagos={pagos} setPagos={setPagos} devoluciones={devoluciones} estimacionRegalos={estimacionRegalos} cuadres={cuadres} setCuadres={setCuadres} traspasos={traspasos} setTraspasos={setTraspasos} aportaciones={aportaciones} setAportaciones={setAportaciones} />}
         {tab === "gastos" && <TabGastos gastos={gastos} setGastos={setGastos} deleteGasto={deleteGasto} deletePago={deletePago} pagos={pagos} setPagos={setPagos} devoluciones={devoluciones} setDevoluciones={setDevoluciones} guests={guests} familias={familias} estimacionRegalos={estimacionRegalos} setEstimacionRegalos={setEstimacionRegalos} />}
         {tab === "invitados" && <TabInvitados guests={guests} setGuests={setGuests} familias={familias} setFamilias={setFamilias} pagos={pagos} gastos={gastos} />}
         {tab === "mesas" && <TabMesas guests={guests} setGuests={setGuests} tablesConfig={tablesConfig} setTablesConfig={setTablesConfig} deleteMesa={deleteMesa} elementos={elementos} setElementos={setElementos} familias={familias} />}
